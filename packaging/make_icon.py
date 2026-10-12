@@ -31,16 +31,52 @@ ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 SS = 4  # 超采样倍数
 
+# macOS 图标惯例：图形画在 1024 画布中央的 824×824 区域里（四周各留 100 透明），
+# 圆角用超椭圆，其半径在 824 基准下约 185。三个平台共用同一张图，统一按这套几何出图。
+MACOS_CANVAS = 1024
+MACOS_CONTENT = 824
+MACOS_INSET = (MACOS_CANVAS - MACOS_CONTENT) // 2  # 100
+MACOS_RADIUS = 185
 
-def _render(size: int, background: tuple[int, ...], paint) -> Image.Image:
+# 三个平台各自的图标口径，都以 1024 画布为基准，供 _render 的 inset/radius 直接用：
+#   mac   — Apple 几何：图形区 824 居中、圆角 185，四周与四角透明；
+#   linux — 满幅 + 圆角：freedesktop 的图标规范不定义几何，桌面徽章式图标按惯例如此；
+#   win   — 满幅 + 方角：.ico 由系统原样绘制、不做裁形，微软自家图标也画满不留白。
+GEOMETRY: dict[str, tuple[int, int]] = {
+    "mac": (MACOS_INSET, MACOS_RADIUS),
+    "linux": (0, RADIUS * MACOS_CANVAS // SIZE),  # 21.9% → 224
+    "win": (0, 0),
+}
+
+
+def _render(
+    size: int,
+    background: tuple[int, ...],
+    paint,
+    radius: int = 0,
+    inset: int = 0,
+) -> Image.Image:
     """在 size×SS 的画布上作画再降采样，得到抗锯齿的边缘。
 
     Pillow 的绘图默认不做抗锯齿，直接按目标尺寸画会在斜边上留下台阶；
     先放大作画、再用 LANCZOS 缩回，相当于 4× 超采样。
+
+    `inset` 与 `radius` 都以 1024 画布为基准（`MACOS_*` 三个常量的口径一致）：先按
+    `inset` 把底色绘图区四周缩进（留透明），再按 `radius` 切圆角。两者都为 0 时是满幅
+    方形底色，托盘标走的就是那条路。
     """
     px = size * SS
-    canvas = Image.new("RGBA", (px, px), background)
-    paint(ImageDraw.Draw(canvas), px)
+    inset_px = px * inset // MACOS_CANVAS
+    plain = radius <= 0 and inset <= 0
+    canvas = Image.new("RGBA", (px, px), background if plain else (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    if not plain:
+        draw.rounded_rectangle(
+            (inset_px, inset_px, px - 1 - inset_px, px - 1 - inset_px),
+            radius=max(1, px * radius // MACOS_CANVAS),
+            fill=background,
+        )
+    paint(draw, px)
     return canvas.resize((size, size), Image.Resampling.LANCZOS)
 
 
@@ -197,13 +233,21 @@ def _paint_arrows(draw: ImageDraw.ImageDraw, px: int, ink: tuple[int, ...]) -> N
     draw.rectangle((rx - shaft_hw, top + head_h, rx + shaft_hw, bottom), fill=ink)
 
 
-def variant_double_arrow(size: int = SIZE) -> Image.Image:
-    """方案五：双向箭头（橙底 + 左向下 / 右向上两支箭头），满幅底色、无圆角。
+def variant_double_arrow(
+    size: int = SIZE, *, inset: int = MACOS_INSET, radius: int = MACOS_RADIUS
+) -> Image.Image:
+    """方案五：双向箭头（橙底 + 左向下 / 右向上两支箭头）。
 
     通道的“上下行”意象：一支下行、一支上行并排，箭头相对、中间留一道细缝。
+    底色几何由 `inset` / `radius` 决定（两者都以 1024 画布为基准）：默认是 macOS 那套
+    （图形区 824 居中、圆角 185），Linux 与 Windows 按各自口径出，见 `GEOMETRY`。
     """
     return _render(
-        size, ARROW_BG + (255,), lambda draw, px: _paint_arrows(draw, px, ARROW_INK)
+        size,
+        ARROW_BG + (255,),
+        lambda draw, px: _paint_arrows(draw, px, ARROW_INK),
+        radius=radius,
+        inset=inset,
     )
 
 
@@ -361,6 +405,14 @@ def build_sheet() -> Path:
     return out
 
 
+def _render_for(name: str, size: int, platform: str) -> Image.Image:
+    """按平台口径渲染指定方案；只有双箭头方案懂 inset/radius，其余方案原样出。"""
+    if name == "double_arrow":
+        inset, radius = GEOMETRY[platform]
+        return variant_double_arrow(size, inset=inset, radius=radius)
+    return VARIANTS[name](size)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="生成应用图标资源")
     parser.add_argument("--variant", choices=sorted(VARIANTS), default="double_arrow")
@@ -409,7 +461,7 @@ def main() -> int:
         if args.trim:
             origin += f" (裁切后 {native.width}x{native.height})"
     else:
-        native = VARIANTS[args.variant]()
+        native = _render_for(args.variant, SIZE, "mac")
         origin = f"方案 {args.variant}"
 
     # PNG 预览统一到 256，便于查看
@@ -420,12 +472,13 @@ def main() -> int:
     )
     preview.save(ASSETS / "icon.png")
     # 高分辨率 PNG：README 用 512（GitHub 内容区约 820px，2x 屏需 ≥512），
-    # 另出一档 1024 备用。走 variant 时按 256 基准的几何原生渲染，不是放大 256。
-    for side in (512, 1024):
+    # 高档 PNG 按消费方分口径原生渲染，不是从 256 放大：
+    # 1024 是 macOS `.icns` 的源（Apple 几何），512 进 Linux 的 hicolor（Linux 口径）。
+    for side, platform in ((512, "linux"), (1024, "mac")):
         high = (
             native.resize((side, side), Image.Resampling.LANCZOS)
             if args.source
-            else VARIANTS[args.variant](side)
+            else _render_for(args.variant, side, platform)
         )
         high.save(ASSETS / f"icon-{side}.png")
     if args.source:
@@ -433,7 +486,7 @@ def main() -> int:
     else:
         # 各尺寸逐档单独渲染：由大图缩下去会把小尺寸的笔形糊掉
         write_ico_frames(
-            [VARIANTS[args.variant](side) for side in ICO_SIZES],
+            [_render_for(args.variant, side, "win") for side in ICO_SIZES],
             ASSETS / "icon.ico",
         )
         if args.variant == "double_arrow":
@@ -441,6 +494,11 @@ def main() -> int:
             write_logo_svg(WEB / "logo.svg")
             print(f"已生成矢量品牌标: {WEB / 'logo.svg'}")
     print(f"已生成: {ASSETS / 'icon.png'} / {ASSETS / 'icon.ico'} ({origin})")
+    if not args.source:
+        print(
+            "三平台口径: icon-1024 = macOS（图形区 824/1024 居中 + 圆角 185）· "
+            "icon-512 = Linux（满幅 + 圆角）· icon.ico = Windows（满幅方角）"
+        )
     return 0
 
 
