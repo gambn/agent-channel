@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+# 归档/改名的旧产物（如 dist-old-20260927），同样不入库
+dist-*/
+.venv/
+venv/
+
+# 工具缓存
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# 运行时产物
+*.log
+*.pid
+
+# 打包暂存：预置内核体积大，不入库
+packaging/vendor/

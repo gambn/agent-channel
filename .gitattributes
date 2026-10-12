@@ -1,0 +1,6 @@
+# 统一换行符：索引、工作区、以及 git archive 导出，一律 LF
+* text=auto eol=lf
+
+# 二进制资源不参与换行符转换与文本 diff
+*.ico -text -diff
+*.png -text -diff

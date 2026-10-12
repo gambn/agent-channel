@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-channel"
+version = "0.1.0"
+description = "agent-channel通道代理: 轻量级 AI 通道代理模块"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "gambn" }]
+keywords = ["agent", "proxy", "sing-box", "ai"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: OS Independent",
+]
+# 代码使用 X | None 等 3.10+ 运行时注解语法
+requires-python = ">=3.10"
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/gambn/agent-channel"
+
+[project.scripts]
+agent-channel = "agent_channel.cli:main"
+
+[tool.setuptools]
+packages = ["agent_channel"]
+
+[tool.setuptools.package-data]
+agent_channel = ["web/*"]

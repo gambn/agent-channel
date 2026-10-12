@@ -1,0 +1,6 @@
+{
+  "include": ["agent_channel", "launch_service.py", "tests"],
+  "extraPaths": ["."],
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "basic"
+}

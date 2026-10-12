@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>agent-channel通道代理 控制与测试中心</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <!-- 顶部标题 -->
+      <div class="header">
+        <h1>
+          <img class="brand-logo" src="logo.svg" alt="" />agent-channel通道代理
+        </h1>
+        <span id="global-badge" class="badge badge-stopped">已停止</span>
+      </div>
+
+      <!-- 状态看板卡片 -->
+      <div class="card">
+        <div class="card-title">
+          <span>通道状态与控制</span>
+          <div class="btn-group">
+            <button id="btn-start" onclick="handleStart()">启动通道</button>
+            <button id="btn-stop" class="btn-dark" onclick="handleStop()">
+              停止
+            </button>
+          </div>
+        </div>
+        <div class="status-grid">
+          <div class="status-item">
+            <div class="status-label">运行模式</div>
+            <div id="status-mode" class="status-value">-</div>
+          </div>
+          <div class="status-item">
+            <div class="status-label">本地代理地址</div>
+            <div id="status-port" class="status-value">-</div>
+          </div>
+          <div class="status-item">
+            <div class="status-label">当前来源</div>
+            <div id="status-source" class="status-value">-</div>
+          </div>
+          <div class="status-item">
+            <div class="status-label">当前活跃出站</div>
+            <div id="status-node" class="status-value">-</div>
+          </div>
+          <div class="status-item">
+            <div class="status-label">落地位置</div>
+            <div id="status-geo" class="status-value">-</div>
+          </div>
+        </div>
+
+        <!-- 同步为本地系统代理开关 -->
+        <div class="switch-row">
+          <div style="display: flex; flex-direction: column; gap: 3px">
+            <div style="display: flex; align-items: center; gap: 8px">
+              <span
+                style="font-size: 13px; font-weight: 600; color: var(--text)"
+                >同步为本地系统代理（开启 Chrome / Edge 浏览器支持）</span
+              >
+              <span
+                id="sysproxy-tag"
+                class="badge"
+                style="
+                  background: var(--neutral-btn);
+                  color: var(--text-muted);
+                  padding: 2px 8px;
+                  font-size: 11px;
+                "
+                >未同步</span
+              >
+            </div>
+            <span style="font-size: 12px; color: var(--text-muted)"
+              >开启后系统全局浏览器开箱即用，通道停止或退出时自动还原关闭 (跨
+              Windows/macOS/Linux)</span
+            >
+          </div>
+          <label class="switch">
+            <input
+              type="checkbox"
+              id="toggle-sysproxy"
+              onchange="handleToggleSysProxy(this)"
+            />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- 节点配置卡片 (含保存按钮) -->
+      <div class="card">
+        <div class="card-title">节点配置与管理</div>
+        <div class="mode-switch">
+          <div
+            id="tab-node"
+            class="mode-tab active"
+            onclick="switchMode('node')"
+          >
+            1. 单节点链接 (URI)
+          </div>
+          <div id="tab-sub" class="mode-tab" onclick="switchMode('sub')">
+            2. 订阅链接
+          </div>
+          <div id="tab-json" class="mode-tab" onclick="switchMode('json')">
+            3. 导入 JSON
+          </div>
+        </div>
+
+        <!-- 单节点模式 -->
+        <div id="panel-node" class="form-group">
+          <label>粘贴单个节点链接（支持 vless://, trojan://, ss://）</label>
+          <input
+            type="text"
+            id="input-node"
+            placeholder="vless://uuid@server:443?security=tls..."
+            autocomplete="off"
+          />
+        </div>
+
+        <!-- 订阅模式 -->
+        <div id="panel-sub" class="form-group" style="display: none">
+          <label>粘贴订阅链接（自动提取前 5 节点并发测速优选）</label>
+          <input
+            type="text"
+            id="input-sub"
+            placeholder="https://example.com/sub"
+            autocomplete="off"
+          />
+        </div>
+
+        <!-- 导入 JSON 模式 -->
+        <div id="panel-json" class="form-group" style="display: none">
+          <label
+            >导入 sing-box JSON 文件（当前已导入
+            <span id="imported-count">0</span> 个节点）</label
+          >
+          <input
+            type="file"
+            id="input-import-file"
+            accept=".json,application/json"
+          />
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              flex-wrap: wrap;
+            "
+          >
+            <button class="btn-secondary" onclick="handleImportNodes()">
+              导入
+            </button>
+            <button class="btn-secondary" onclick="handleClearImportedNodes()">
+              清空导入节点
+            </button>
+          </div>
+          <span style="font-size: 12px; color: var(--text-muted)"
+            >导入的节点会进入 json 槽的候选池；测试用的节点请测完清空</span
+          >
+          <div
+            id="import-result"
+            style="margin-top: 10px; font-size: 13px"
+          ></div>
+        </div>
+
+        <!-- 保存按钮区域 -->
+        <div id="save-bar" class="save-bar">
+          <div style="display: flex; align-items: center; gap: 10px">
+            <button onclick="handleSaveConfig()">💾 保存配置</button>
+            <span
+              id="save-hint"
+              style="
+                font-size: 13px;
+                color: var(--green-primary);
+                font-weight: 600;
+                display: none;
+              "
+              >✅ 配置已保存到本地</span
+            >
+          </div>
+          <span style="font-size: 12px; color: var(--text-muted)"
+            >保存后下次启动将自动载入</span
+          >
+        </div>
+
+        <!-- 连接测速区域 -->
+        <div
+          style="border-top: 1px solid var(--card-border); padding-top: 14px"
+        >
+          <div style="display: flex; align-items: center; gap: 10px">
+            <button class="btn-secondary" onclick="handleBenchmark()">
+              ⚡ 连接测速
+            </button>
+            <button class="btn-secondary" onclick="handleClearBenchmark()">
+              清空结果
+            </button>
+            <span style="font-size: 12px; color: var(--text-muted)"
+              >测试当前节点或订阅链接中节点的连通性与延迟</span
+            >
+          </div>
+          <div
+            id="benchmark-result"
+            style="margin-top: 10px; font-size: 13px"
+          ></div>
+        </div>
+
+        <!-- 出站选择：自动优选 / 指定节点（决定出口 IP） -->
+        <div
+          style="
+            border-top: 1px solid var(--card-border);
+            padding-top: 14px;
+            margin-top: 14px;
+          "
+        >
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              gap: 10px;
+              flex-wrap: wrap;
+            "
+          >
+            <span style="font-size: 13px; font-weight: 600; color: var(--text)"
+              >启用时的出站</span
+            >
+            <select id="select-outbound" onchange="handleOutboundChange()">
+              <option value="auto">
+                自动优选（把上面配置的来源并池，按延迟 + 转发验证挑最优）
+              </option>
+            </select>
+            <span
+              id="outbound-hint"
+              style="
+                font-size: 12px;
+                color: var(--green-primary);
+                font-weight: 600;
+                display: none;
+              "
+            ></span>
+          </div>
+          <span style="font-size: 12px; color: var(--text-muted)"
+            >自动优选 = 出口 IP 自动挑；选某一个节点 = 出口 IP
+            固定为它（不并池、不竞争）</span
+          >
+        </div>
+      </div>
+
+      <!-- AI 连通性测试卡片 -->
+      <div class="card">
+        <div class="card-title">
+          <span>AI 接口连通性测试 (真机握手)</span>
+          <button class="btn-secondary" onclick="handleTestAI()">
+            一键测试
+          </button>
+        </div>
+        <div
+          id="test-via-hint"
+          style="
+            display: none;
+            font-size: 12px;
+            color: var(--text-muted);
+            margin: 4px 0 8px;
+          "
+        ></div>
+        <div class="test-list">
+          <div class="test-item">
+            <span style="font-weight: 500">OpenAI API (api.openai.com)</span>
+            <span
+              id="test-openai"
+              class="test-status"
+              style="color: var(--text-muted)"
+              >未测试</span
+            >
+          </div>
+          <div class="test-item">
+            <span style="font-weight: 500"
+              >Google Gemini (generativelanguage.googleapis.com)</span
+            >
+            <span
+              id="test-gemini"
+              class="test-status"
+              style="color: var(--text-muted)"
+              >未测试</span
+            >
+          </div>
+          <div class="test-item">
+            <span style="font-weight: 500"
+              >Anthropic Claude (api.anthropic.com)</span
+            >
+            <span
+              id="test-anthropic"
+              class="test-status"
+              style="color: var(--text-muted)"
+              >未测试</span
+            >
+          </div>
+        </div>
+      </div>
+
+      <!-- 工具箱与内核更新卡片 -->
+      <div class="card">
+        <div class="card-title">工具箱与内核管理</div>
+        <div class="form-group">
+          <label>RFC 4122 v4 UUID 生成器 (供节点配置与链路调试)</label>
+          <div style="display: flex; gap: 8px">
+            <input type="text" id="input-uuid" readonly />
+            <button class="btn-secondary" onclick="handleGenUUID()">
+              生成并复制
+            </button>
+          </div>
+        </div>
+        <div
+          style="
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-top: 1px solid var(--card-border);
+            padding-top: 14px;
+          "
+        >
+          <div>
+            <div style="display: flex; align-items: center; gap: 8px">
+              <span
+                style="font-size: 13px; font-weight: 600; color: var(--text)"
+                >sing-box 官方预编译内核</span
+              >
+              <span
+                id="core-badge"
+                class="badge"
+                style="
+                  background: var(--neutral-btn);
+                  color: var(--text-muted);
+                  font-size: 11px;
+                  padding: 2px 7px;
+                "
+                >检测中</span
+              >
+            </div>
+            <div
+              id="core-status"
+              style="font-size: 12px; color: var(--text-muted); margin-top: 3px"
+            >
+              正在读取本地内核版本...
+            </div>
+          </div>
+          <div class="btn-group">
+            <button
+              id="btn-check-core"
+              class="btn-secondary"
+              onclick="handleCheckCore()"
+            >
+              检查官方更新
+            </button>
+            <button
+              id="btn-update-core"
+              style="display: none"
+              onclick="handleUpdateCore()"
+            >
+              立即更新内核
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
