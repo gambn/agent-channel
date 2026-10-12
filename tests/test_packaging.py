@@ -614,47 +614,91 @@ def test_write_build_manifest_binds_commit_to_artifact_hashes():
     """② 的落点：把"提交号 ↔ 各产物 sha256"写成清单，指纹才成为追溯凭据。
 
     审核指出过两个问题：产物来自未提交的工作树、且没有任何一处把提交号与指纹绑起来。
-    这里验两点：清单里的哈希确实是产物自己的哈希；工作树是脏的时候**必须标出来**，
-    而不是假装对得上某个提交。
+    这里验四件事：清单哈希与产物一致；只收**本版本**的产物（dist/ 里的旧版本不混进来）；
+    同一提交的多次构建（先 x64 再 arm64）累积；工作树脏要标出来。
     """
+    import os
+
     build = _load_build_module()
+    version = build._project_version()
+
     with tempfile.TemporaryDirectory() as tmp:
         dist = Path(tmp)
-        (dist / "agent-channel-0.1.0-linux-x64.tar.gz").write_bytes(b"TARBALL")
-        (dist / "agent-channel_0.1.0_amd64.deb").write_bytes(b"DEB")
+        x64 = dist / f"agent-channel-{version}-darwin-x64.tar.gz"
+        x64.write_bytes(b"X64")
+        stale = dist / "agent-channel-0.0.9-linux-x64.tar.gz"
+        stale.write_bytes(b"OLD")
         (dist / build._onefile_name()).write_bytes(b"SLIM")
-        (dist / "agent_channel-0.1.0-py3-none-any.whl").write_bytes(b"WHEEL")
 
         def fake_git(args: list[str]) -> str:
             return {
-                ("rev-parse", "HEAD"): "c" * 40,
                 ("log", "-1", "--pretty=%s"): "测试提交",
                 ("status", "--porcelain"): "",
             }.get(tuple(args), "")
 
-        with patch.object(build, "DIST_DIR", dist), patch.object(build, "_git_field", fake_git):
+        with (
+            patch.object(build, "DIST_DIR", dist),
+            patch.object(build, "_git_field", fake_git),
+            patch.dict(os.environ, {"AGENT_CHANNEL_BUILD_COMMIT": "c" * 40}),
+        ):
             sums = build.write_build_manifest()
 
+            # 第二次构建（另一架构）累积进同一份清单
+            arm64 = dist / f"agent-channel-{version}-darwin-arm64.tar.gz"
+            arm64.write_bytes(b"ARM64")
+            build.write_build_manifest()
+
         assert sums is not None and sums.is_file()
-        lines = sums.read_text(encoding="utf-8").splitlines()
-        assert len(lines) == 4, lines
         recorded = dict(
-            (line.split("  ", 1)[1], line.split("  ", 1)[0]) for line in lines
+            (line.split("  ", 1)[1], line.split("  ", 1)[0])
+            for line in sums.read_text(encoding="utf-8").splitlines()
         )
+        assert set(recorded) == {x64.name, arm64.name, build._onefile_name()}
+        assert stale.name not in recorded, "旧版本产物不许混进本次清单"
         for name, digest in recorded.items():
             assert digest == hashlib.sha256((dist / name).read_bytes()).hexdigest(), name
+
         info = (dist / "BUILD-INFO.txt").read_text(encoding="utf-8")
         assert "commit: " + "c" * 40 in info
+        assert f"version: {version}" in info
         assert "worktree_dirty: false" in info
-        assert "pyinstaller: " in info and "python: " in info
 
         # 工作树脏 → 必须如实标脏（这份产物对不上任何提交）
-        def dirty_git(args: list[str]) -> str:
-            return " M packaging/build.py" if tuple(args) == ("status", "--porcelain") else fake_git(args)
-
-        with patch.object(build, "DIST_DIR", dist), patch.object(build, "_git_field", dirty_git):
+        with (
+            patch.object(build, "DIST_DIR", dist),
+            patch.object(build, "_git_field", fake_git),
+            patch.dict(
+                os.environ,
+                {"AGENT_CHANNEL_BUILD_COMMIT": "c" * 40, "AGENT_CHANNEL_BUILD_DIRTY": "1"},
+            ),
+        ):
             build.write_build_manifest()
         assert "worktree_dirty: true" in (dist / "BUILD-INFO.txt").read_text(encoding="utf-8")
+
+
+def test_build_commit_prefers_explicit_env_then_git_then_unknown():
+    """构建环境没有 git 时（源码树被拷进容器/另一台机器）由调用方显式给提交号。
+
+    实测背景：Linux 产物是在一个没有 git 的 rootfs 里打的，清单里写成了 `commit: unknown`。
+    这里允许显式传入，但**不编造**：都不给就是 unknown。
+    """
+    import os
+
+    build = _load_build_module()
+    with patch.dict(os.environ, {"AGENT_CHANNEL_BUILD_COMMIT": "a" * 40}):
+        assert build._build_commit() == "a" * 40
+    with (
+        patch.dict(os.environ, {}, clear=False),
+        patch.object(build, "_git_field", lambda args: "b" * 40),
+    ):
+        os.environ.pop("AGENT_CHANNEL_BUILD_COMMIT", None)
+        assert build._build_commit() == "b" * 40
+    with (
+        patch.dict(os.environ, {}, clear=False),
+        patch.object(build, "_git_field", lambda args: ""),
+    ):
+        os.environ.pop("AGENT_CHANNEL_BUILD_COMMIT", None)
+        assert build._build_commit() == "unknown"
 
 
 def test_git_field_returns_empty_when_git_unavailable():

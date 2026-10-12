@@ -1258,15 +1258,68 @@ def _git_field(args: list[str]) -> str:
     return out.stdout.strip() if out.returncode == 0 else ""
 
 
-def _artifact_files() -> list[Path]:
-    """本次纳入指纹清单的产物（用户真正会下载的那几类）。"""
-    files: list[Path] = []
+def _build_commit() -> str:
+    """本次构建对应的提交号。
+
+    优先用环境变量 `AGENT_CHANNEL_BUILD_COMMIT`：构建有时跑在没有 git 的环境里
+    （源码树被拷到容器或另一台机器上打），这时由调用方把提交号显式传进来，
+    总比清单里写 `unknown` 强。**但绝不编造**——传不进来且读不到 git 就是 unknown。
+    """
+    override = os.environ.get("AGENT_CHANNEL_BUILD_COMMIT", "").strip()
+    return override or _git_field(["rev-parse", "HEAD"]) or "unknown"
+
+
+def _build_dirty() -> bool:
+    """工作树是否脏。同样允许由调用方显式声明（见 `_build_commit`）。"""
+    flag = os.environ.get("AGENT_CHANNEL_BUILD_DIRTY", "").strip()
+    if flag in ("0", "1"):
+        return flag == "1"
+    return bool(_git_field(["status", "--porcelain"]))
+
+
+def _artifact_files() -> tuple[list[Path], list[Path]]:
+    """返回（本次该进清单的产物, 被跳过的旧版本产物）。
+
+    只看**当前版本**的产物：dist/ 里常常还躺着上一版的文件（0.1.0 那批），
+    全扫进来会让清单把别的版本也算成这一次的产出——那正是审核说的"指纹不能当凭据"。
+    版本切换时旧的产物不会自动删，这里只如实报告它们被跳过（由人决定是否归档）。
+    """
+    version = _project_version()
+    keep: list[Path] = []
+    skipped: list[Path] = []
+    candidates: list[Path] = []
     for pattern in ("*.tar.gz", "*.dmg", "*.deb", "*.whl"):
-        files.extend(sorted(DIST_DIR.glob(pattern)))
+        candidates.extend(sorted(DIST_DIR.glob(pattern)))
     onefile = DIST_DIR / _onefile_name()
     if onefile.is_file():
-        files.append(onefile)
-    return files
+        candidates.append(onefile)
+    for path in candidates:
+        # 精简单文件名里没有版本号，它每次构建都会被覆盖，按当前算
+        if path.name == _onefile_name() or version in path.name:
+            keep.append(path)
+        else:
+            skipped.append(path)
+    return keep, skipped
+
+
+def _manifest_entries(commit: str) -> dict[str, str]:
+    """同一提交下已记录的产物指纹（跨架构/跨平台构建累积，损坏或换提交就作废）。"""
+    sums = DIST_DIR / "SHA256SUMS"
+    info = DIST_DIR / "BUILD-INFO.txt"
+    if not sums.is_file() or not info.is_file():
+        return {}
+    try:
+        text = info.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    if f"commit: {commit}" not in text or f"version: {_project_version()}" not in text:
+        return {}
+    entries: dict[str, str] = {}
+    for line in sums.read_text(encoding="utf-8").splitlines():
+        digest, _, name = line.partition("  ")
+        if name and (DIST_DIR / name).is_file():
+            entries[name] = digest
+    return entries
 
 
 def write_build_manifest() -> Path | None:
@@ -1276,17 +1329,22 @@ def write_build_manifest() -> Path | None:
     指纹因此不能当追溯凭据。这里在每次 `--all` 收尾时生成清单，发版时与产物一起附上；
     工作树是脏的会**明确标出来**（dirty=true），而不是假装对得上某个提交。
     """
-    files = _artifact_files()
+    files, skipped = _artifact_files()
     if not files:
         return None
 
-    commit = _git_field(["rev-parse", "HEAD"]) or "unknown"
+    commit = _build_commit()
     subject = _git_field(["log", "-1", "--pretty=%s"])
-    dirty = bool(_git_field(["status", "--porcelain"]))
+    dirty = _build_dirty()
+
+    # 同一提交的多次构建（先 x64 再 arm64）累积进同一份清单：否则后一次会把前一次的
+    # 指纹冲掉，而发布要的是"这个提交的全部产物"。
+    entries = _manifest_entries(commit)
+    entries.update({path.name: _sha256_file(path) for path in files})
 
     sums = DIST_DIR / "SHA256SUMS"
     sums.write_text(
-        "".join(f"{_sha256_file(path)}  {path.name}\n" for path in files),
+        "".join(f"{digest}  {name}\n" for name, digest in sorted(entries.items())),
         encoding="utf-8",
     )
 
@@ -1315,7 +1373,7 @@ def write_build_manifest() -> Path | None:
                 else "bundled_core: none",
                 "",
                 "artifacts:",
-                *[f"  {path.name}" for path in files],
+                *[f"  {name}" for name in sorted(entries)],
             ]
         )
         + "\n",
@@ -1323,10 +1381,15 @@ def write_build_manifest() -> Path | None:
     )
     if dirty:
         print("!! 工作树是脏的：BUILD-INFO.txt 已标 dirty=true，这份产物对不上任何提交")
-    print(f"已写出指纹清单: {sums.name}（{len(files)} 个产物）+ {info.name}")
+    if skipped:
+        print(
+            "注意：dist/ 里还有非本版本的旧产物，本次清单**未**收录（发布前请归档或清掉）: "
+            + ", ".join(path.name for path in skipped)
+        )
+    print(f"已写出指纹清单: {sums.name}（本次 {len(files)} 个 / 累计 {len(entries)} 个）+ {info.name}")
     print(f"  提交: {commit}")
-    for path in files:
-        print(f"  {_sha256_file(path)}  {path.name}")
+    for name, digest in sorted(entries.items()):
+        print(f"  {digest}  {name}")
     return sums
 
 
