@@ -111,7 +111,7 @@ The probe is sent through the node's exit, so the geolocation service sees the *
 
 > Installers and zip builds are downloaded from the repository [Releases](https://github.com/gambn/agent-channel/releases) page; if that release ships no binaries, build locally per §10 (`python packaging/build.py`, the kernel manifest is pinned to v1.14.3).
 
-1. Double-click `agent-channel-0.1.0-setup.exe`;
+1. Double-click `agent-channel-0.1.1-setup.exe`;
 2. Walk through the wizard (install directory, desktop shortcut, start-with-Windows are optional);
 3. It launches when installation finishes; a tray icon appears and the browser opens the panel at `http://127.0.0.1:18888` (default port; if it is taken the program picks another one).
 
@@ -128,7 +128,7 @@ Two paths — **A is recommended** (no Python-version or PATH pitfalls):
 
 **A. Native packages** (download from the repository [Releases](https://github.com/gambn/agent-channel/releases) page; if that release ships no binaries, use B)
 
-- **Linux `.deb` (x86_64)**: `sudo apt install ./agent-channel_0.1.0_amd64.deb`
+- **Linux `.deb` (x86_64)**: `sudo apt install ./agent-channel_0.1.1_amd64.deb`
 - **Universal tar.gz (Linux / macOS)**: unpack it and run `./install.sh` — installs to `~/.local/opt/agent-channel`, symlinks the command into `~/.local/bin`, **no root needed**; `./install.sh --uninstall` removes it (your `~/.agent_channel` data is kept)
 - **macOS `.dmg` (one for x64, one for arm64)**: open it and drag `agent-channel.app` into Applications
 - All three ship the official prebuilt sing-box kernel: ready to use, no system Python required

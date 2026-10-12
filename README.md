@@ -113,7 +113,7 @@ export HTTPS_PROXY=http://127.0.0.1:20849
 
 > 安装包与 zip 产物在仓库 [Releases](https://github.com/gambn/agent-channel/releases) 页下载；若该版本未附带产物，按 §十 自行打包（`python packaging/build.py`，内核清单已钉 v1.14.3）。
 
-1. 双击 `agent-channel-0.1.0-setup.exe`；
+1. 双击 `agent-channel-0.1.1-setup.exe`；
 2. 按向导走完（可选安装目录、桌面快捷方式、是否开机自启）；
 3. 安装完自动启动，托盘出现图标，浏览器自动打开控制面板 `http://127.0.0.1:18888`（默认端口，被占用会自动换）。
 
@@ -130,7 +130,7 @@ export HTTPS_PROXY=http://127.0.0.1:20849
 
 **A. 原生包**（在仓库 [Releases](https://github.com/gambn/agent-channel/releases) 页下载；若该 Release 未附带产物，走 B）
 
-- **Linux `.deb`（x86_64）**：`sudo apt install ./agent-channel_0.1.0_amd64.deb`
+- **Linux `.deb`（x86_64）**：`sudo apt install ./agent-channel_0.1.1_amd64.deb`
 - **通用 tar.gz（Linux / macOS）**：解包后执行 `./install.sh` —— 装到 `~/.local/opt/agent-channel`、命令软链到 `~/.local/bin`，**不需要 root**；`./install.sh --uninstall` 卸载（保留 `~/.agent_channel` 里的配置与内核）
 - **macOS `.dmg`（x64 / arm64 各一份）**：打开后把 `agent-channel.app` 拖进「应用程序」
 - 三种包都**内置官方编译的 sing-box 内核**，装完即用，不依赖系统 Python

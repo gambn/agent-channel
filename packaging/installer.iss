@@ -1,7 +1,7 @@
 ; agent-channel通道代理 —— Windows 安装向导（Inno Setup 6）
 ;
 ; 编译方式（推荐由 packaging/build.py --installer 调用，会自动传入版本号）：
-;   ISCC.exe /DAppVersion=0.1.0 packaging\installer.iss
+;   ISCC.exe /DAppVersion=0.1.1 packaging\installer.iss
 ;
 ; 说明：
 ; - 脚本内所有相对路径都以本文件所在目录（packaging\）为基准；
@@ -10,7 +10,7 @@
 ; - 源目录 dist\agent-channel 由 packaging\build.py 产出，内核已随包预置。
 
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.1.1"
 #endif
 
 #define AppName "agent-channel通道代理"
