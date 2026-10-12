@@ -608,3 +608,57 @@ def test_quit_hint_is_printed_when_there_is_no_window(tmp_path=None):
     text = buf.getvalue()
     assert "退出程序" in text and "Ctrl-C" in text, text
     assert "关掉浏览器标签不会退出进程" in text, text
+
+
+def test_write_build_manifest_binds_commit_to_artifact_hashes():
+    """② 的落点：把"提交号 ↔ 各产物 sha256"写成清单，指纹才成为追溯凭据。
+
+    审核指出过两个问题：产物来自未提交的工作树、且没有任何一处把提交号与指纹绑起来。
+    这里验两点：清单里的哈希确实是产物自己的哈希；工作树是脏的时候**必须标出来**，
+    而不是假装对得上某个提交。
+    """
+    build = _load_build_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        dist = Path(tmp)
+        (dist / "agent-channel-0.1.0-linux-x64.tar.gz").write_bytes(b"TARBALL")
+        (dist / "agent-channel_0.1.0_amd64.deb").write_bytes(b"DEB")
+        (dist / build._onefile_name()).write_bytes(b"SLIM")
+        (dist / "agent_channel-0.1.0-py3-none-any.whl").write_bytes(b"WHEEL")
+
+        def fake_git(args: list[str]) -> str:
+            return {
+                ("rev-parse", "HEAD"): "c" * 40,
+                ("log", "-1", "--pretty=%s"): "测试提交",
+                ("status", "--porcelain"): "",
+            }.get(tuple(args), "")
+
+        with patch.object(build, "DIST_DIR", dist), patch.object(build, "_git_field", fake_git):
+            sums = build.write_build_manifest()
+
+        assert sums is not None and sums.is_file()
+        lines = sums.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 4, lines
+        recorded = dict(
+            (line.split("  ", 1)[1], line.split("  ", 1)[0]) for line in lines
+        )
+        for name, digest in recorded.items():
+            assert digest == hashlib.sha256((dist / name).read_bytes()).hexdigest(), name
+        info = (dist / "BUILD-INFO.txt").read_text(encoding="utf-8")
+        assert "commit: " + "c" * 40 in info
+        assert "worktree_dirty: false" in info
+        assert "pyinstaller: " in info and "python: " in info
+
+        # 工作树脏 → 必须如实标脏（这份产物对不上任何提交）
+        def dirty_git(args: list[str]) -> str:
+            return " M packaging/build.py" if tuple(args) == ("status", "--porcelain") else fake_git(args)
+
+        with patch.object(build, "DIST_DIR", dist), patch.object(build, "_git_field", dirty_git):
+            build.write_build_manifest()
+        assert "worktree_dirty: true" in (dist / "BUILD-INFO.txt").read_text(encoding="utf-8")
+
+
+def test_git_field_returns_empty_when_git_unavailable():
+    """取不到提交号就返回空串（由上层写成 unknown），绝不编造出处。"""
+    build = _load_build_module()
+    with patch.object(build.subprocess, "run", side_effect=OSError("no git")):
+        assert build._git_field(["rev-parse", "HEAD"]) == ""

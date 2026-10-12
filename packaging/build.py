@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -1246,6 +1247,89 @@ def build_wheel() -> int:
     return subprocess.call(cmd, cwd=str(ROOT))
 
 
+def _git_field(args: list[str]) -> str:
+    """读一个 git 字段；读不到就返回空串（不编造出处）。"""
+    try:
+        out = subprocess.run(
+            ["git", *args], cwd=ROOT, capture_output=True, text=True, timeout=15
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def _artifact_files() -> list[Path]:
+    """本次纳入指纹清单的产物（用户真正会下载的那几类）。"""
+    files: list[Path] = []
+    for pattern in ("*.tar.gz", "*.dmg", "*.deb", "*.whl"):
+        files.extend(sorted(DIST_DIR.glob(pattern)))
+    onefile = DIST_DIR / _onefile_name()
+    if onefile.is_file():
+        files.append(onefile)
+    return files
+
+
+def write_build_manifest() -> Path | None:
+    """把"提交号 ↔ 各产物 sha256"落成 dist/SHA256SUMS 与 dist/BUILD-INFO.txt。
+
+    为什么需要：审核指出产物曾来自未提交的工作树、且没有任何一处把提交号与指纹绑起来，
+    指纹因此不能当追溯凭据。这里在每次 `--all` 收尾时生成清单，发版时与产物一起附上；
+    工作树是脏的会**明确标出来**（dirty=true），而不是假装对得上某个提交。
+    """
+    files = _artifact_files()
+    if not files:
+        return None
+
+    commit = _git_field(["rev-parse", "HEAD"]) or "unknown"
+    subject = _git_field(["log", "-1", "--pretty=%s"])
+    dirty = bool(_git_field(["status", "--porcelain"]))
+
+    sums = DIST_DIR / "SHA256SUMS"
+    sums.write_text(
+        "".join(f"{_sha256_file(path)}  {path.name}\n" for path in files),
+        encoding="utf-8",
+    )
+
+    try:
+        import PyInstaller
+
+        pyinstaller_version = PyInstaller.__version__
+    except Exception:
+        pyinstaller_version = "unknown"
+    from agent_channel.binary import platform_arch, platform_os
+
+    info = DIST_DIR / "BUILD-INFO.txt"
+    info.write_text(
+        "\n".join(
+            [
+                f"version: {_project_version()}",
+                f"commit: {commit}",
+                f"commit_subject: {subject}",
+                f"worktree_dirty: {'true' if dirty else 'false'}",
+                f"built_at_utc: {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}",
+                f"platform: {platform_os()}-{platform_arch()}",
+                f"python: {sys.version.split()[0]}",
+                f"pyinstaller: {pyinstaller_version}",
+                f"bundled_core: {_bundle_name(CORE_MANIFEST[_platform_key()])}"
+                if _platform_key() in CORE_MANIFEST
+                else "bundled_core: none",
+                "",
+                "artifacts:",
+                *[f"  {path.name}" for path in files],
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    if dirty:
+        print("!! 工作树是脏的：BUILD-INFO.txt 已标 dirty=true，这份产物对不上任何提交")
+    print(f"已写出指纹清单: {sums.name}（{len(files)} 个产物）+ {info.name}")
+    print(f"  提交: {commit}")
+    for path in files:
+        print(f"  {_sha256_file(path)}  {path.name}")
+    return sums
+
+
 def _report_artifacts() -> None:
     """列一遍本次产出，避免交付时拿错或拿了旧文件。"""
     version = _project_version()
@@ -1330,6 +1414,7 @@ def _build_all_darwin() -> int:
     if build_wheel() != 0:
         return 1
 
+    write_build_manifest()
     _report_artifacts()
     return 0
 
@@ -1365,6 +1450,7 @@ def _build_all_windows() -> int:
     if build_wheel() != 0:
         return 1
 
+    write_build_manifest()
     _report_artifacts()
     return 0
 
@@ -1404,6 +1490,7 @@ def _build_all_posix() -> int:
     if build_wheel() != 0:
         return 1
 
+    write_build_manifest()
     _report_artifacts()
     return 0
 
