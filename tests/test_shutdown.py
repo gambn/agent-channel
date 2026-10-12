@@ -245,6 +245,9 @@ def test_panel_server_silences_client_disconnects():
         cases = (
             (BrokenPipeError(32, "Broken pipe"), ""),
             (ConnectionResetError(104, "Connection reset"), ""),
+            # Windows 上客户端提前中止是 ConnectionAbortedError（WinError 10053），
+            # PI 在构建机实测：只吞 BrokenPipe 时 8 次断连仍刷 8 条回溯
+            (ConnectionAbortedError(10053, "你的主机中的软件中止了一个已建立的连接"), ""),
             (ValueError("boom"), "boom"),
         )
         for exc, expect in cases:

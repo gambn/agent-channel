@@ -1251,7 +1251,15 @@ def _git_field(args: list[str]) -> str:
     """读一个 git 字段；读不到就返回空串（不编造出处）。"""
     try:
         out = subprocess.run(
-            ["git", *args], cwd=ROOT, capture_output=True, text=True, timeout=15
+            ["git", *args],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            # 显式 UTF-8：Windows 默认 cp936，遇到中文提交标题会 UnicodeDecodeError，
+            # 表现成 out.stdout 为 None、清单步骤 AttributeError 崩掉（PI 在构建机上实测）
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
         )
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -1274,7 +1282,9 @@ def _build_dirty() -> bool:
     flag = os.environ.get("AGENT_CHANNEL_BUILD_DIRTY", "").strip()
     if flag in ("0", "1"):
         return flag == "1"
-    return bool(_git_field(["status", "--porcelain"]))
+    # core.fileMode=false：Windows 克隆常见"执行位/换行"假脏（实测过一次），
+    # 那是检出配置噪音，不是内容改动，不该让整批产物被标成对不上提交
+    return bool(_git_field(["-c", "core.fileMode=false", "status", "--porcelain"]))
 
 
 def _artifact_files() -> tuple[list[Path], list[Path]]:
@@ -1288,7 +1298,8 @@ def _artifact_files() -> tuple[list[Path], list[Path]]:
     keep: list[Path] = []
     skipped: list[Path] = []
     candidates: list[Path] = []
-    for pattern in ("*.tar.gz", "*.dmg", "*.deb", "*.whl"):
+    # Windows 主交付物是 zip 与安装向导：漏了它们，清单就绑不住那两个文件（PI 实测漏收）
+    for pattern in ("*.tar.gz", "*.dmg", "*.deb", "*.zip", "*-setup.exe", "*.whl"):
         candidates.extend(sorted(DIST_DIR.glob(pattern)))
     onefile = DIST_DIR / _onefile_name()
     if onefile.is_file():

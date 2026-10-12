@@ -692,7 +692,11 @@ class PanelHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         exc = sys.exc_info()[1]
-        if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+        # ConnectionAbortedError 是 Windows 上的同一类情形（WinError 10053：
+        # 客户端提前中止连接）——PI 在构建机上实测：只吞 BrokenPipe 时，8 次断连仍刷 8 条回溯
+        if isinstance(
+            exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
+        ):
             return
         super().handle_error(request, client_address)
 

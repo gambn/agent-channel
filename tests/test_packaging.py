@@ -706,3 +706,65 @@ def test_git_field_returns_empty_when_git_unavailable():
     build = _load_build_module()
     with patch.object(build.subprocess, "run", side_effect=OSError("no git")):
         assert build._git_field(["rev-parse", "HEAD"]) == ""
+
+
+def test_manifest_includes_windows_main_artifacts():
+    """F1：Windows 的主交付物是 zip 与 setup.exe，漏收它们清单就绑不住那两个文件。
+
+    PI 在构建机上实测：0.1.1 的 Windows 四件产物，清单只写进了 exe 与 whl。
+    """
+    build = _load_build_module()
+    version = build._project_version()
+    with tempfile.TemporaryDirectory() as tmp:
+        dist = Path(tmp)
+        names = [
+            f"agent-channel-{version}-setup.exe",
+            f"agent-channel-{version}-windows-x64.zip",
+            build._onefile_name(),
+            f"agent_channel-{version}-py3-none-any.whl",
+        ]
+        for name in names:
+            (dist / name).write_bytes(name.encode())
+        with patch.object(build, "DIST_DIR", dist):
+            files, skipped = build._artifact_files()
+        got = sorted(path.name for path in files)
+        assert got == sorted(names), got
+        assert skipped == []
+
+
+def test_git_field_decodes_as_utf8():
+    """F2：git 输出必须显式按 UTF-8 解码。
+
+    构建机（Windows）默认 cp936，遇到中文提交标题会 UnicodeDecodeError，表现成
+    out.stdout 为 None、清单步骤 AttributeError 崩掉——三件产物都在、清单没落盘。
+    """
+    import subprocess as real_subprocess
+
+    build = _load_build_module()
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured.update(kwargs)
+        return real_subprocess.CompletedProcess(cmd, 0, stdout="标题", stderr="")
+
+    with patch.object(build.subprocess, "run", fake_run):
+        assert build._git_field(["log", "-1", "--pretty=%s"]) == "标题"
+    assert captured.get("encoding") == "utf-8", captured
+    assert captured.get("errors") == "replace", captured
+
+
+def test_dirty_check_ignores_filemode_noise():
+    """F2 附带：Windows 克隆常见的"执行位/换行"假脏不该把整批产物标成对不上提交。"""
+    build = _load_build_module()
+    seen: list[list[str]] = []
+
+    def fake_git(args):
+        seen.append(list(args))
+        return ""
+
+    with patch.object(build, "_git_field", fake_git), patch.dict("os.environ", {}, clear=False):
+        import os
+
+        os.environ.pop("AGENT_CHANNEL_BUILD_DIRTY", None)
+        build._build_dirty()
+    assert seen == [["-c", "core.fileMode=false", "status", "--porcelain"]], seen
