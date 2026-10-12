@@ -140,8 +140,8 @@ Requires **Python 3.10+**: macOS's built-in `/usr/bin/python3` is 3.9 and **does
 # 1) get the source
 git clone https://github.com/gambn/agent-channel.git && cd agent-channel
 
-# 2) create a virtualenv and install (all commands then live under .venv/bin/)
-python3 -m venv .venv
+# 2) create a virtualenv and install (replace python3.12 with any interpreter ≥3.10 on this machine; macOS's bundled python3 is 3.9 and won't do)
+python3.12 -m venv .venv
 .venv/bin/pip install .
 
 # 3) install the official prebuilt kernel (picks the asset for this platform)

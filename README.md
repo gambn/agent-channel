@@ -142,8 +142,8 @@ export HTTPS_PROXY=http://127.0.0.1:20849
 # 1) 拉源码
 git clone https://github.com/gambn/agent-channel.git && cd agent-channel
 
-# 2) 建虚拟环境安装（之后所有命令都在 .venv/bin/ 下）
-python3 -m venv .venv
+# 2) 建虚拟环境安装（把 python3.12 换成你机器上 ≥3.10 的解释器名；macOS 自带的 python3 是 3.9，不能用）
+python3.12 -m venv .venv
 .venv/bin/pip install .
 
 # 3) 装官方预编译内核（按当前平台自动选资产）
