@@ -190,7 +190,18 @@ def _sha256_file(path: Path) -> str:
 
 
 def verify_vendor_core(entry: dict) -> None:
-    """B（强制）：暂存内核必须与清单逐字节一致，否则中止打包。"""
+    """B（强制）：暂存内核必须与清单逐字节一致，否则中止打包。
+
+    另外拒绝任何**运行态配置**混进暂存目录：`active_config.json` 之类含真实节点凭据
+    （`stage_core` 从本机 bin 抄文件时最容易带上；实测发生过一次，靠凭据自检才拦住）。
+    内核发行包本身不含 `.json`，所以这里按后缀一律拒绝。
+    """
+    runtime_state = sorted(p.name for p in VENDOR_DIR.glob("*.json"))
+    if runtime_state:
+        raise SystemExit(
+            f"[build] 暂存目录含运行态配置文件 {runtime_state}——它们可能带真实凭据，"
+            "已中止打包。请清掉后重跑。"
+        )
     problems: list[str] = []
     for name, expected in entry["files"].items():
         path = VENDOR_DIR / name
@@ -278,7 +289,9 @@ def stage_core() -> Path | None:
         if local_matches:
             VENDOR_DIR.mkdir(parents=True, exist_ok=True)
             for src in local.parent.iterdir():
-                if src.is_file() and src.suffix != ".bak":
+                # 跳过 .bak（备份）与 .json（运行态：active_config.json 含真实凭据）——
+                # 只读的内核与可写的状态必须分开，与 tests/__init__.py 的播种口径一致。
+                if src.is_file() and src.suffix not in (".bak", ".json"):
                     shutil.copy2(src, VENDOR_DIR / src.name)
             print(f"已暂存本地内核（含伴生文件，版本与清单一致）: {local.parent} -> {VENDOR_DIR}")
         else:

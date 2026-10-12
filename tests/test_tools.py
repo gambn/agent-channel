@@ -182,6 +182,7 @@ def test_cli_stop_reports_daemon_busy_instead_of_claiming_stopped():
 
 def test_remote_post_surfaces_server_error_body():
     """服务端明确答复的错误（如 409）要原样带回，不能和"不可达"一起变成 None。"""
+    import email.message
     import io
     import json
     import urllib.error
@@ -194,7 +195,7 @@ def test_remote_post_surfaces_server_error_body():
         url="http://127.0.0.1:18888/api/disable",
         code=409,
         msg="Conflict",
-        hdrs=None,
+        hdrs=email.message.Message(),  # 用真的空 Message，不用 None（类型上 hdrs 非可选）
         fp=io.BytesIO(body),
     )
     with patch("urllib.request.urlopen", side_effect=conflict):

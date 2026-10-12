@@ -143,3 +143,61 @@ def test_stage_core_uses_official_when_local_version_differs():
         got = run(f"v{entry_version}")
         assert got == [], f"版本一致时不该重复下载: {got}"
         assert (vendor / core_name).read_bytes() == b"KERNEL", "同版本地内核应被暂存"
+
+
+def test_stage_core_skips_runtime_state_json():
+    """从本机 bin 抄内核时，运行态 `.json`（`active_config.json` 含真实凭据）不许进暂存。
+
+    回归背景：构建机实测发生过一次——把整个 bin 抄进暂存，连带实盘配置与真节点凭据，
+    靠 `_check_credentials` 才拦住。`.bak` 与 `.json` 都必须跳过。
+    """
+    build = _load_build_module()
+    entry_version = build.CORE_MANIFEST[build._platform_key()]["version"]
+    core_name = build._core_name()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        vendor = base / "vendor"
+        local_dir = base / "local"
+        local_dir.mkdir()
+        (local_dir / core_name).write_bytes(b"KERNEL")
+        (local_dir / "active_config.json").write_text('{"outbounds":[{"password":"REAL"}]}')
+        (local_dir / f"{core_name}.v1.14.2.bak").write_bytes(b"OLD")
+
+        with (
+            patch.object(build, "VENDOR_DIR", vendor),
+            patch(
+                "agent_channel.binary.get_local_binary_path",
+                lambda: local_dir / core_name,
+            ),
+            patch(
+                "agent_channel.binary.get_local_core_version",
+                lambda: f"v{entry_version}",
+            ),
+            patch.object(build, "fetch_official_core", lambda entry: None),
+            patch.object(build, "verify_vendor_core", lambda entry: None),
+        ):
+            build.stage_core()
+
+        names = sorted(p.name for p in vendor.iterdir())
+        assert names == [core_name], f"暂存目录只该有内核本体，实际: {names}"
+
+
+def test_verify_vendor_core_rejects_runtime_state():
+    """暂存目录混入运行态 `.json` 时必须中止——这是凭据防线，不是洁癖。"""
+    build = _load_build_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        vendor = Path(tmp)
+        (vendor / "sing-box.exe").write_bytes(b"KERNEL")
+        (vendor / "active_config.json").write_text('{"outbounds":[]}')
+        entry = {
+            "version": "t",
+            "files": {"sing-box.exe": hashlib.sha256(b"KERNEL").hexdigest()},
+        }
+        with patch.object(build, "VENDOR_DIR", vendor):
+            try:
+                build.verify_vendor_core(entry)
+            except SystemExit as exc:
+                assert "运行态" in str(exc), exc
+                return
+        raise AssertionError("暂存目录含 active_config.json 时必须中止打包")

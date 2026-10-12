@@ -318,8 +318,10 @@ def test_pick_asset_ignores_longer_names_containing_the_base():
         },
         {"name": base, "browser_download_url": "https://example.invalid/zip"},
     ]
-    assert binary._pick_asset(assets)["name"] == base
-    assert binary._pick_asset_url(assets).endswith("/zip")
+    picked = binary._pick_asset(assets)
+    assert picked is not None and picked["name"] == base
+    picked_url = binary._pick_asset_url(assets)
+    assert picked_url is not None and picked_url.endswith("/zip")
 
 
 def test_extract_all_reports_write_failure_instead_of_missing_member():

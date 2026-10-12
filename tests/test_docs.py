@@ -35,3 +35,21 @@ def test_readme_protocol_lists_only_supported_types():
         assert names, f"{name} 里没抓到协议名（清单措辞变了？请同步本测试）"
         unsupported = names - set(_IMPORT_SUPPORTED_TYPES)
         assert not unsupported, f"{name} 列了工具不认的类型: {sorted(unsupported)}"
+
+
+def test_project_version_is_consistent():
+    """版本号两处（`pyproject.toml` 与 `agent_channel.__version__`）必须一致。
+
+    回归背景：版本号一直靠人记得两处同改，没有任何机器校验——发版时最容易漏的就是它。
+    """
+    import agent_channel
+
+    root = Path(__file__).resolve().parent.parent
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.MULTILINE)
+    assert match, "pyproject.toml 里找不到 version 字段"
+    declared = match.group(1)
+    assert declared == agent_channel.__version__, (
+        f"版本号不一致：pyproject.toml={declared} vs "
+        f"agent_channel.__version__={agent_channel.__version__}"
+    )
