@@ -124,28 +124,39 @@ Installation **needs no administrator rights** and raises no UAC prompt.
 
 ### macOS / Linux
 
-No prebuilt packages yet; install from source (Python 3.10+, no third-party runtime deps):
+Two paths — **A is recommended** (no Python-version or PATH pitfalls):
+
+**A. Native packages** (download from the repository [Releases](https://github.com/gambn/agent-channel/releases) page; if that release ships no binaries, use B)
+
+- **Linux `.deb` (x86_64)**: `sudo apt install ./agent-channel_0.1.0_amd64.deb`
+- **Universal tar.gz (Linux / macOS)**: unpack it and run `./install.sh` — installs to `~/.local/opt/agent-channel`, symlinks the command into `~/.local/bin`, **no root needed**; `./install.sh --uninstall` removes it (your `~/.agent_channel` data is kept)
+- Both bundles ship the official prebuilt sing-box kernel: ready to use, no system Python required
+
+**B. Install from source (developer path)**
+
+Requires **Python 3.10+**: macOS's built-in `/usr/bin/python3` is 3.9 and **does not qualify** — pick an explicit version (e.g. `python3.12`).
 
 ```bash
 # 1) get the source
 git clone https://github.com/gambn/agent-channel.git && cd agent-channel
 
-# 2) install
-python3 -m pip install --user .
+# 2) create a virtualenv and install (all commands then live under .venv/bin/)
+python3 -m venv .venv
+.venv/bin/pip install .
 
 # 3) install the official prebuilt kernel (picks the asset for this platform)
-agent-channel core list
-agent-channel core install
+.venv/bin/agent-channel core list
+.venv/bin/agent-channel core install
 
 # 4) configure a node and start
-agent-channel set-sub "<your-subscription-url>"
-agent-channel start
+.venv/bin/agent-channel set-sub "<your-subscription-url>"
+.venv/bin/agent-channel start
 
 # 5) open the control panel
-agent-channel ui
+.venv/bin/agent-channel ui
 ```
 
-On Linux, step 2 may be rejected by PEP 668 on some distros; use `python3 -m pip install --user --break-system-packages .` instead, or a venv (`python3 -m venv .venv && .venv/bin/pip install .`).
+> Why a virtualenv rather than `pip install --user`: on macOS `--user` puts the command in `$(python3 -m site --user-base)/bin` (measured: `/Users/<you>/Library/Python/3.x/bin`), which is **not on PATH by default**, so step 3 fails with `command not found`. On top of that, both Homebrew Python on macOS and distro Python on Debian/Ubuntu refuse `--user` installs because of **PEP 668** (`--break-system-packages` gets past that refusal, but not past the PATH problem).
 
 Three notes (all code facts):
 

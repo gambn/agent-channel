@@ -32,4 +32,4 @@ agent-channel = "agent_channel.cli:main"
 packages = ["agent_channel"]
 
 [tool.setuptools.package-data]
-agent_channel = ["web/*"]
+agent_channel = ["web/**/*"]

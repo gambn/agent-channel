@@ -126,28 +126,39 @@ export HTTPS_PROXY=http://127.0.0.1:20849
 
 ### macOS / Linux
 
-暂无预编译安装包，用源码安装（Python 3.10+，无第三方运行时依赖）：
+两条路，任选；**推荐 A**（省去 Python 版本与 PATH 的一切麻烦）：
+
+**A. 原生包**（在仓库 [Releases](https://github.com/gambn/agent-channel/releases) 页下载；若该 Release 未附带产物，走 B）
+
+- **Linux `.deb`（x86_64）**：`sudo apt install ./agent-channel_0.1.0_amd64.deb`
+- **通用 tar.gz（Linux / macOS）**：解包后执行 `./install.sh` —— 装到 `~/.local/opt/agent-channel`、命令软链到 `~/.local/bin`，**不需要 root**；`./install.sh --uninstall` 卸载（保留 `~/.agent_channel` 里的配置与内核）
+- 两种包都**内置官方编译的 sing-box 内核**，装完即用，不依赖系统 Python
+
+**B. 源码安装（开发者路线）**
+
+需要 **Python 3.10+**：macOS 自带的 `/usr/bin/python3` 是 3.9，**不满足要求**，请显式指定版本（如 `python3.12`）。
 
 ```bash
 # 1) 拉源码
 git clone https://github.com/gambn/agent-channel.git && cd agent-channel
 
-# 2) 安装
-python3 -m pip install --user .
+# 2) 建虚拟环境安装（之后所有命令都在 .venv/bin/ 下）
+python3 -m venv .venv
+.venv/bin/pip install .
 
 # 3) 装官方预编译内核（按当前平台自动选资产）
-agent-channel core list
-agent-channel core install
+.venv/bin/agent-channel core list
+.venv/bin/agent-channel core install
 
 # 4) 配置节点并启动
-agent-channel set-sub "<你的订阅链接>"
-agent-channel start
+.venv/bin/agent-channel set-sub "<你的订阅链接>"
+.venv/bin/agent-channel start
 
 # 5) 打开控制面板
-agent-channel ui
+.venv/bin/agent-channel ui
 ```
 
-Linux 第 2 步在部分发行版会因 PEP 668 被拒，改用 `python3 -m pip install --user --break-system-packages .`，或建虚拟环境（`python3 -m venv .venv && .venv/bin/pip install .`）。
+> 为什么默认虚拟环境、而不是 `pip install --user`：macOS 上 `--user` 会把命令装进 `$(python3 -m site --user-base)/bin`（实测为 `/Users/<你>/Library/Python/3.x/bin`），**该目录默认不在 PATH**，第 3 步就会 `command not found`；另外 macOS 的 Homebrew Python 与 Debian/Ubuntu 等发行版 Python 都会因 **PEP 668** 直接拒绝 `--user` 安装（`--break-system-packages` 能绕过，但仍绕不过 PATH 那条）。
 
 三点说明（都是代码事实）：
 
