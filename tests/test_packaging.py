@@ -70,29 +70,20 @@ def test_verify_vendor_core_accepts_matching_and_rejects_mismatch():
             ], "重压后官方归档不该留在暂存里"
             build.verify_vendor_core(entry)  # 一致 → 放行
 
-    # ── 归档形态（Windows zip）：整包 sha256 与逐文件都要对 ──
+    # ── zip 源（Windows 官方资产）：先验真、再重压，校验同样按逐文件比对 ──
     with tempfile.TemporaryDirectory() as tmp:
         vendor = Path(tmp)
         official, entry = _synthetic_archive(
             vendor, members, name="sing-box-9.9.9-test-windows-amd64.zip"
         )
         with patch.object(build, "VENDOR_DIR", vendor):
-            build.verify_vendor_core(entry)  # 官方原件原样 → 放行
+            build._prepare_bundle(entry)
+            assert sorted(p.name for p in vendor.iterdir()) == [
+                "sing-box-9.9.9-test-windows-amd64.tar.xz"
+            ]
+            build.verify_vendor_core(entry)  # 重压后逐文件一致 → 放行
 
     # ── 各种不通过：都必须中止打包 ──
-    with tempfile.TemporaryDirectory() as tmp:
-        vendor = Path(tmp)
-        _official, zip_entry = _synthetic_archive(
-            vendor, members, name="sing-box-9.9.9-test-windows-amd64.zip"
-        )
-        with patch.object(build, "VENDOR_DIR", vendor):
-            try:
-                build.verify_vendor_core({**zip_entry, "archive_sha256": "0" * 64})
-            except SystemExit:
-                pass
-            else:
-                raise AssertionError("应中止打包: 归档形态的整包 sha256 不符")
-
     cases: dict[str, tuple[dict, list[tuple[str, bytes]]]] = {
         "归档里某个文件被换过": (
             entry,
@@ -128,23 +119,25 @@ def test_verify_vendor_core_accepts_matching_and_rejects_mismatch():
                 raise AssertionError("暂存里没有随包内核时必须中止打包")
 
 
-def test_bundle_form_follows_official_asset_type():
-    """随包形态按官方资产类型分叉：`.zip`（Windows）原样，`.tar.gz`（POSIX）重压。
+def test_bundle_name_is_xz_for_every_platform():
+    """随包形态三平台一致：官方归档（.tar.gz 或 .zip）都换成 `.tar.xz`。
 
-    依据是实测：Windows 的外层压缩器（Inno LZMA2 / zip deflate）已经把这 93 MB 压到
-    ~30 MB，再预压一层压不动、setup.exe 反而变大；POSIX 外层只是 gzip，重压成 xz
-    实测省 30–40%。
+    为什么 Windows 也重压：实测官方 zip 是 deflate 压的（31.3 MB），外层 Inno 面对一个
+    已压缩的 blob 只能原样塞进去，setup.exe 因此从 31.3 MB 涨到 41.9 MB；同一批文件用
+    xz 只要 21.5 MB。
     """
     build = _load_build_module()
-    assert build._bundle_form({"url": "https://x/sing-box-1.14.3-windows-amd64.zip"}) == "archive"
-    assert build._bundle_form({"url": "https://x/sing-box-1.14.3-linux-amd64.tar.gz"}) == "xz"
+    assert (
+        build._bundle_name({"url": "https://x/sing-box-1.14.3-linux-amd64.tar.gz"})
+        == "sing-box-1.14.3-linux-amd64.tar.xz"
+    )
     assert (
         build._bundle_name({"url": "https://x/sing-box-1.14.3-darwin-arm64.tar.gz"})
         == "sing-box-1.14.3-darwin-arm64.tar.xz"
     )
     assert (
         build._bundle_name({"url": "https://x/sing-box-1.14.3-windows-amd64.zip"})
-        == "sing-box-1.14.3-windows-amd64.zip"
+        == "sing-box-1.14.3-windows-amd64.tar.xz"
     )
 
 
@@ -295,8 +288,11 @@ def test_stage_core_reuses_only_bundle_matching_the_manifest():
         assert sorted(p.name for p in vendor.iterdir()) == [bundle_name]
 
 
-def test_windows_style_zip_entry_keeps_official_archive():
-    """`.zip` 条目原样随包：不重压、不换名（Windows 侧外层已经压过一遍）。"""
+def test_windows_style_zip_entry_is_also_repacked():
+    """`.zip` 源（Windows 官方资产）现在同样重压成 `.tar.xz`，官方 zip 不留存。
+
+    回归背景：Windows 曾"原样放官方 zip"，实测 setup.exe 因此涨了 10.6 MB。
+    """
     build = _load_build_module()
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
@@ -308,8 +304,10 @@ def test_windows_style_zip_entry_keeps_official_archive():
         _OFFICIAL_BLOBS[official.name] = official.read_bytes()
         vendor = base / "vendor"
         assert _stage_case(build, vendor, entry) == ["9.9.9"]
-        assert sorted(p.name for p in vendor.iterdir()) == [official.name]
-        assert (vendor / official.name).read_bytes() == official.read_bytes()
+        assert sorted(p.name for p in vendor.iterdir()) == [
+            "sing-box-9.9.9-test-win.tar.xz"
+        ], "zip 源应被重压，官方 zip 不留存"
+        assert build._member_hashes(vendor / "sing-box-9.9.9-test-win.tar.xz") == entry["files"]
 
 
 def test_stage_core_clears_runtime_state_before_packaging():

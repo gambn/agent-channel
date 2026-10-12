@@ -62,13 +62,12 @@ if str(ROOT) not in sys.path:
 #   2. “内置内核是哪一版”从此可复现——换台机器打包，装的还是同一份官方文件。
 # A（便利）：暂存缺件时按清单里的官方 URL 下载并校验（digest 取自官方 release 资产）。
 #
-# 随包形态按官方资产类型分叉（`_bundle_form`）：
-#   - Windows 资产是 `.zip`：外层压缩器（Inno 的 LZMA2 / zip 的 deflate）已经把这
-#     93 MB 压到 ~30 MB，再预压一层它压不动，setup.exe 反而会变大 → 原样随包；
-#   - Linux/macOS 资产是 `.tar.gz`：外层是 zlib/gzip，实测预压成 xz 能省 30–40%
-#     （linux-amd64 30.2→18.2 MB、darwin-arm64 27.8→18.6 MB）→ 重压成 `.tar.xz` 随包。
-# 两条路径共用同一道纪律：**先按 archive_sha256 验官方归档，再按 files 逐文件验真，
-# 通过之后才允许重压**；重压只是容器换了，解出来的文件仍须与官方逐字节一致。
+# 随包形态：官方归档**先验真、再重压成 `.tar.xz`**，三个平台一致。
+#   - 收益实测：linux-amd64 30.2→18.2 MB、darwin-arm64 27.8→18.6 MB、
+#     windows-amd64 31.3→21.5 MB（外层容器若不预压，就白让 deflate/LZMA2 去啃一个
+#     已经压过的 blob——Windows 首次那样做时 setup.exe 直接从 31.3 MB 涨到 41.9 MB）。
+# 纪律：**先按 archive_sha256 验官方整包，再按 files 逐文件验真，通过之后才允许重压**；
+# 重压只是换了容器，解出来的文件仍须与官方逐字节一致。
 #
 # 升级内核时**所有条目一起改**：版本号、归档 sha256、解压后各文件 sha256。
 # 条目覆盖 platform_os()/platform_arch() 能命名的全部平台键（共 11 个），
@@ -247,20 +246,16 @@ def _platform_key() -> str:
     return f"{platform_os()}-{_arch_class()}"
 
 
-def _bundle_form(entry: dict) -> str:
-    """随包形态：`archive` = 官方归档原样，`xz` = 重压成 `.tar.xz`。
-
-    依据是官方资产类型，不是平台名：`.zip`（Windows）的外层容器已经压过一遍，
-    `.tar.gz`（Linux/macOS）只是 gzip，重压成 xz 有 30–40% 的实测收益。
-    """
-    return "archive" if _archive_name(entry).endswith(".zip") else "xz"
-
-
 def _bundle_name(entry: dict) -> str:
-    """随包文件名：官方归档名，或 POSIX 侧的 `.tar.xz` 名。"""
-    if _bundle_form(entry) == "archive":
-        return _archive_name(entry)
-    return _archive_name(entry)[: -len(".tar.gz")] + ".tar.xz"
+    """随包文件名：官方归档名换成 `.tar.xz`（三平台一致）。
+
+    只换后缀，不动版本与平台标记——文件名本身就是"这是哪一版、哪个平台"的凭据。
+    """
+    official = _archive_name(entry)
+    for suffix in (".tar.gz", ".tgz", ".zip"):
+        if official.endswith(suffix):
+            return official[: -len(suffix)] + ".tar.xz"
+    return f"{official}.tar.xz"
 
 
 def _sha256_file(path: Path) -> str:
@@ -343,14 +338,6 @@ def verify_vendor_core(entry: dict) -> None:
         )
 
     bundle = VENDOR_DIR / expected_name
-    if _bundle_form(entry) == "archive":
-        actual = _sha256_file(bundle)
-        if actual != entry["archive_sha256"]:
-            raise SystemExit(
-                f"[build] 暂存归档 {bundle.name} 的 sha256 不符，已中止打包：\n"
-                f"  实际: {actual}\n  期望: {entry['archive_sha256']}"
-            )
-
     problems: list[str] = []
     try:
         members = _member_hashes(bundle)
@@ -527,10 +514,11 @@ def _clear_vendor() -> list[str]:
 def stage_core() -> Path | None:
     """准备打包用的内核，做 B 强制校验；返回随包文件路径（无条目时 None）。
 
-    随包形态由 `_bundle_form` 决定：Windows 原样放官方 `.zip`，Linux/macOS 放重压后的
-    `.tar.xz`（实测省 30–40%，Windows 侧外层压缩器已经压过一遍、预压无收益还会变大）。
-    两条路都遵守同一道纪律——**先按 archive_sha256 验官方归档，再按 files 逐文件验真，
-    通过之后才允许重压**；解包交给首次启动的 `ensure_local_core()`。
+    随包形态三平台一致：官方归档**先验真、再重压成 `.tar.xz`**（实测省 30–40%；
+    Windows 侧曾经"原样放官方 zip"，实测让 setup.exe 从 31.3 MB 涨到 41.9 MB——
+    外层压缩器对一个已压过的 blob 无能为力）。纪律不变——**先按 archive_sha256 验官方
+    整包，再按 files 逐文件验真，通过之后才允许重压**；解包交给首次启动的
+    `ensure_local_core()`。
 
     暂存一律以清单为准（哈希比对），不看"文件在不在"：换平台或换架构构建时上一轮的
     残留还在，不清就会把别的平台/架构的内核打进包里。
@@ -551,8 +539,7 @@ def stage_core() -> Path | None:
     else:
         official = VENDOR_DIR / _archive_name(entry)
         reusable_official = (
-            _bundle_form(entry) == "xz"
-            and official.is_file()
+            official.is_file()
             and _sha256_file(official) == entry["archive_sha256"]
         )
         if reusable_official:
@@ -563,7 +550,7 @@ def stage_core() -> Path | None:
                 print(f"[build] 暂存目录与 {_platform_key()} 清单不符，已清理: {stale}")
             fetch_official_core(entry)
 
-    if _bundle_form(entry) == "xz" and not (VENDOR_DIR / _bundle_name(entry)).is_file():
+    if not (VENDOR_DIR / _bundle_name(entry)).is_file():
         _prepare_bundle(entry)
 
     verify_vendor_core(entry)
