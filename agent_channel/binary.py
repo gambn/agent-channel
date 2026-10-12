@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -53,52 +54,101 @@ def get_local_binary_path() -> Path:
     return get_bin_dir() / _core_filename()
 
 
-def get_bundled_core_dir() -> Path | None:
-    """返回随安装包预置内核所在目录（含伴生文件如 libcronet.dll）；未预置时返回 None。
+_BUNDLED_ARCHIVE_SUFFIXES = (".tar.gz", ".tgz", ".tar.xz", ".txz", ".zip")
+
+
+def get_bundled_core_archive() -> Path | None:
+    """返回随安装包预置的**官方归档**路径；未预置时返回 None。
+
+    包里放的是官方 `.zip` / `.tar.gz` 原件，而不是解开的 `sing-box` 与伴生库
+    （`libcronet.dll` / `libcronet.so`）。这么定的原因是 macOS：`.app` 会被
+    `codesign --deep` 重签里面所有嵌套的 Mach-O，解开的 `sing-box` 一旦进包就不再与官方
+    字节一致，"包内内核 == 官方资产"这条判据当场失效；而压缩归档不是 Mach-O，签名工具
+    不碰它，于是三个平台都能按 `CORE_MANIFEST` 里的 `archive_sha256` 逐字节核验。
+    首次启动由 `ensure_local_core()` 把它解到本地 bin 目录。
 
     覆盖两种分发形态：
     - PyInstaller onefile：解包到 sys._MEIPASS/bin/
-    - PyInstaller onedir / 免安装绿色包：可执行文件同级的 bin/
-
-    返回**目录**而不是单个 exe：naive 出站依赖同目录的 libcronet.dll，只播种 exe 会让
-    内核在初始化 outbound[0] 时 FATAL 退出（表现为“所有节点都不可用”）。
+    - PyInstaller onedir（含 macOS 的 .app）：可执行文件同级的 bin/
     """
-    name = _core_filename()
+    for candidate in _bundled_bin_dirs():
+        if not candidate.is_dir():
+            continue
+        for path in sorted(candidate.iterdir()):
+            if path.is_file() and path.name.lower().endswith(_BUNDLED_ARCHIVE_SUFFIXES):
+                return path
+    return None
+
+
+def _bundled_bin_dirs() -> list[Path]:
+    """随包预置目录的候选位置，按优先级排列。"""
     candidates: list[Path] = []
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         candidates.append(Path(meipass) / "bin")
     candidates.append(Path(sys.executable).resolve().parent / "bin")
-    for candidate in candidates:
-        if (candidate / name).is_file():
-            return candidate
-    return None
+    return candidates
 
 
 def ensure_local_core() -> bool:
-    """确保本地内核就绪；缺失时用随包副本播种，避免首次运行还要联网下载。
+    """确保本地内核就绪；缺失时用随包归档解出，避免首次运行还要联网下载。
 
     逐文件补齐：本地已有的**不覆盖**（不降级用户手动更新的内核），但缺失的伴生文件
-    （如 libcronet.dll）要补上——naive 出站缺它会让内核在初始化 outbound[0] 时
-    FATAL 退出，表现成“所有节点都不可用”。`core install` 路径解出全部文件，本函数
+    （如 `libcronet.so`）要补上——naive 出站缺它会让内核在初始化 outbound[0] 时
+    FATAL 退出，表现成"所有节点都不可用"。`core install` 那条路径会整包替换，本函数
     只负责随包预置这条路径。
     """
     target = get_local_binary_path()
-    bundle_dir = get_bundled_core_dir()
-    if bundle_dir is None:
+    archive = get_bundled_core_archive()
+    if archive is None:
         return target.exists()
+    if target.exists() and all(
+        (target.parent / name).exists()
+        for name in _archive_member_names(archive)
+    ):
+        # 本地已经齐了（含伴生文件），不必再解一遍
+        return True
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        for src in bundle_dir.iterdir():
-            # 跳过 .bak 备份（如 `sing-box.exe.v1.14.2.bak`）：只播内核与伴生文件。
-            if not src.is_file() or src.suffix == ".bak":
+        staging = Path(tempfile.mkdtemp(prefix=".seed-", dir=str(target.parent)))
+    except OSError:
+        return target.exists()
+    try:
+        names = _extract_all(archive, staging)
+        if not names:
+            return target.exists()
+        for name in names:
+            dest = target.parent / name
+            if dest.exists():
                 continue
-            dest = target.parent / src.name
-            if not dest.exists():
-                shutil.copy2(src, dest)
+            shutil.copy2(staging / name, dest)
+        if platform.system().lower() != "windows" and target.exists():
+            os.chmod(target, 0o755)
     except OSError:
         return False
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     return target.exists()
+
+
+def _archive_member_names(archive: Path) -> list[str]:
+    """归档里的成员文件名（只读，用不上时不抛错）。"""
+    try:
+        if archive.name.lower().endswith((".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar")):
+            with tarfile.open(archive, "r:*") as handle:
+                return [
+                    member.name.split("/")[-1]
+                    for member in handle.getmembers()
+                    if member.isfile() and member.name.split("/")[-1]
+                ]
+        with zipfile.ZipFile(archive) as handle:
+            return [
+                item.split("/")[-1]
+                for item in handle.namelist()
+                if not item.endswith("/") and item.split("/")[-1]
+            ]
+    except (OSError, tarfile.TarError, zipfile.BadZipFile):
+        return []
 
 
 def get_local_core_version() -> str:
@@ -204,8 +254,8 @@ def _extract_all(archive_path: Path, dest_dir: Path) -> list[str]:
     """
     names: list[str] = []
     try:
-        if archive_path.name.endswith((".tar.gz", ".tgz")):
-            with tarfile.open(archive_path, "r:gz") as archive:
+        if archive_path.name.endswith((".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar")):
+            with tarfile.open(archive_path, "r:*") as archive:
                 for member in archive.getmembers():
                     if not member.isfile():
                         continue

@@ -130,7 +130,16 @@ Two paths — **A is recommended** (no Python-version or PATH pitfalls):
 
 - **Linux `.deb` (x86_64)**: `sudo apt install ./agent-channel_0.1.0_amd64.deb`
 - **Universal tar.gz (Linux / macOS)**: unpack it and run `./install.sh` — installs to `~/.local/opt/agent-channel`, symlinks the command into `~/.local/bin`, **no root needed**; `./install.sh --uninstall` removes it (your `~/.agent_channel` data is kept)
-- Both bundles ship the official prebuilt sing-box kernel: ready to use, no system Python required
+- **macOS `.dmg` (one for x64, one for arm64)**: open it and drag `agent-channel.app` into Applications
+- All three ship the official prebuilt sing-box kernel: ready to use, no system Python required
+
+> **First launch on macOS**: the bundle is ad-hoc signed and not notarized by Apple, so a copy
+> downloaded through a browser will be blocked by Gatekeeper the first time ("unidentified
+> developer" or "damaged"). Either path works: the **tar.gz** route strips the quarantine flag
+> in `install.sh`, so it opens right away; for the **dmg** route, open the app once and use
+> "Open Anyway" under System Settings → Privacy & Security (macOS 15 removed the right-click
+> shortcut), or run `xattr -dr com.apple.quarantine /Applications/agent-channel.app`.
+> After that it opens normally.
 
 **B. Install from source (developer path)**
 
@@ -160,7 +169,7 @@ python3.12 -m venv .venv
 
 Three notes (all code facts):
 
-- There is **no tray icon** off Windows; use the CLI `start` / `stop` for start/stop and proxy restore.
+- There is **no tray icon** off Windows; use the CLI `start` / `stop` or the buttons in the panel for start/stop and proxy restore.
 - macOS may ask for "network" permission on first run; Linux's system proxy (`gsettings`) only applies to desktops that follow the GNOME proxy convention (GNOME / Cinnamon / MATE) — on KDE etc. point the proxy at `127.0.0.1:20849` manually.
 - Kernel download goes through `api.github.com`; networks that cannot reach GitHub must solve that first (same as Windows).
 
@@ -182,7 +191,9 @@ When it is up, the status card reads "running" and shows the active outbound.
 
 ## 7. Tray icon (Windows)
 
-While running, an icon sits in the system tray. **Right-click** for: **Open panel** / **Start channel** / **Stop channel** / **Quit** (quitting restores the system proxy). **Double-click** the icon to open the panel. There is no tray on macOS / Linux; it opens the panel on launch.
+While running, an icon sits in the system tray. **Right-click** for: **Open panel** / **Start channel** / **Stop channel** / **Quit** (quitting restores the system proxy). **Double-click** the icon to open the panel.
+
+Each platform uses the affordance that fits it: **Windows** uses the system tray; **macOS** gets a native window (the red close button stops the channel, restores the system proxy and exits; the in-window "退出" button does the same); **Linux** is CLI + browser panel — there is no native window, so quit with the **Quit button at the bottom of the panel** or Ctrl-C, and note that **closing the browser tab does not stop the process**.
 
 ## 8. Command line
 

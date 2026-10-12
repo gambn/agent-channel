@@ -340,8 +340,15 @@ def _cmd_core_install(args: argparse.Namespace) -> int:
 
 
 def _cmd_ui(args: argparse.Namespace) -> int:
+    from .core import install_exit_handlers
     from .server import launch_ui
 
+    # 面板是前台阻塞的，被 SIGTERM 杀掉时不会走 atexit（Dock/会话注销、`kill` 都算），
+    # 于是系统代理可能被留在一个指向死端口的状态里。这里装上与托盘「退出」同一套清理。
+    install_exit_handlers()
+    from .window import print_quit_hint
+
+    print_quit_hint()  # 这条路径只有浏览器面板：把"怎么退出"说在前面
     launch_ui(port=args.port, open_browser=not args.no_browser, block=True)
     return EXIT_OK
 
@@ -423,7 +430,11 @@ def _force_utf8_io() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .utils import configure_stdio
+
     _force_utf8_io()
+    # 输出被重定向时是块缓冲：面板地址、进度这类"边跑边要看"的信息不能压着不刷
+    configure_stdio()
     args = build_parser().parse_args(argv)
     return args.func(args)
 

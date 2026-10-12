@@ -18,27 +18,162 @@ def _load_build_module():
     return module
 
 
+def _synthetic_archive(
+    tmp_dir: Path, members: dict[str, bytes], name: str = "sing-box-9.9.9-test-amd64.tar.gz"
+) -> tuple[Path, dict]:
+    """造一份"官方归档"与配套的清单条目（哈希由内容算出来，别无第二份口径）。"""
+    import io
+    import tarfile
+    import zipfile
+
+    archive = tmp_dir / name
+    if name.endswith(".zip"):
+        with zipfile.ZipFile(archive, "w") as handle:
+            for member, body in members.items():
+                handle.writestr(f"sing-box-9.9.9-test/{member}", body)
+    else:
+        with tarfile.open(archive, "w:gz") as handle:
+            for member, body in members.items():
+                info = tarfile.TarInfo(f"sing-box-9.9.9-test/{member}")
+                info.size = len(body)
+                info.mode = 0o755
+                handle.addfile(info, io.BytesIO(body))
+    blob = archive.read_bytes()
+    entry = {
+        "version": "9.9.9",
+        "url": f"https://example.invalid/{name}",
+        "archive_sha256": hashlib.sha256(blob).hexdigest(),
+        "files": {
+            member: hashlib.sha256(body).hexdigest() for member, body in members.items()
+        },
+    }
+    return archive, entry
+
+
 def test_verify_vendor_core_accepts_matching_and_rejects_mismatch():
-    """B 强制：暂存内核与清单逐字节一致才放行；哈希不符或缺文件都必须中止打包。"""
+    """B 强制：暂存内核与清单逐字节一致才放行；归档不符、内容不符、缺件、多件都要中止。
+
+    POSIX 侧的随包形态是重压后的 `.tar.xz`（官方归档先验真再重压），Windows 侧是官方
+    `.zip` 原样，两条路共用"逐文件对清单"这道校验，归档形态再加一道整包 sha256。
+    """
     build = _load_build_module()
+    members = {"sing-box": b"KERNEL", "libcronet.so": b"SO"}
+
+    # ── POSIX 形态：官方 tar.gz → 重压 → 校验通过 ──
     with tempfile.TemporaryDirectory() as tmp:
         vendor = Path(tmp)
-        (vendor / "sing-box.exe").write_bytes(b"KERNEL")
-        ok = {
-            "version": "test",
-            "files": {"sing-box.exe": hashlib.sha256(b"KERNEL").hexdigest()},
-        }
+        official, entry = _synthetic_archive(vendor, members)
         with patch.object(build, "VENDOR_DIR", vendor):
-            build.verify_vendor_core(ok)  # 一致 → 放行
-            for bad in (
-                {"version": "test", "files": {"sing-box.exe": "0" * 64}},
-                {"version": "test", "files": {"nope.dll": "0" * 64}},
-            ):
+            build._prepare_bundle(entry)
+            assert sorted(p.name for p in vendor.iterdir()) == [
+                "sing-box-9.9.9-test-amd64.tar.xz"
+            ], "重压后官方归档不该留在暂存里"
+            build.verify_vendor_core(entry)  # 一致 → 放行
+
+    # ── 归档形态（Windows zip）：整包 sha256 与逐文件都要对 ──
+    with tempfile.TemporaryDirectory() as tmp:
+        vendor = Path(tmp)
+        official, entry = _synthetic_archive(
+            vendor, members, name="sing-box-9.9.9-test-windows-amd64.zip"
+        )
+        with patch.object(build, "VENDOR_DIR", vendor):
+            build.verify_vendor_core(entry)  # 官方原件原样 → 放行
+
+    # ── 各种不通过：都必须中止打包 ──
+    with tempfile.TemporaryDirectory() as tmp:
+        vendor = Path(tmp)
+        _official, zip_entry = _synthetic_archive(
+            vendor, members, name="sing-box-9.9.9-test-windows-amd64.zip"
+        )
+        with patch.object(build, "VENDOR_DIR", vendor):
+            try:
+                build.verify_vendor_core({**zip_entry, "archive_sha256": "0" * 64})
+            except SystemExit:
+                pass
+            else:
+                raise AssertionError("应中止打包: 归档形态的整包 sha256 不符")
+
+    cases: dict[str, tuple[dict, list[tuple[str, bytes]]]] = {
+        "归档里某个文件被换过": (
+            entry,
+            [("sing-box", b"TAMPERED"), ("libcronet.so", b"SO")],
+        ),
+        "归档里缺文件": (entry, [("sing-box", b"KERNEL")]),
+        "归档里多出清单没有的文件": (
+            entry,
+            [("sing-box", b"KERNEL"), ("libcronet.so", b"SO"), ("evil", b"X")],
+        ),
+    }
+    for label, (bad_entry, bad_members) in cases.items():
+        with tempfile.TemporaryDirectory() as tmp:
+            vendor = Path(tmp)
+            build._write_xz_bundle(
+                bad_members, vendor / build._bundle_name(entry)
+            )
+            with patch.object(build, "VENDOR_DIR", vendor):
                 try:
-                    build.verify_vendor_core(bad)
+                    build.verify_vendor_core(bad_entry)
                 except SystemExit:
                     continue
-                raise AssertionError(f"应中止打包: {bad}")
+            raise AssertionError(f"应中止打包: {label}")
+
+    # 暂存里没有该有的东西
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch.object(build, "VENDOR_DIR", Path(tmp)):
+            try:
+                build.verify_vendor_core(entry)
+            except SystemExit as exc:
+                assert "应恰好包含" in str(exc), exc
+            else:
+                raise AssertionError("暂存里没有随包内核时必须中止打包")
+
+
+def test_bundle_form_follows_official_asset_type():
+    """随包形态按官方资产类型分叉：`.zip`（Windows）原样，`.tar.gz`（POSIX）重压。
+
+    依据是实测：Windows 的外层压缩器（Inno LZMA2 / zip deflate）已经把这 93 MB 压到
+    ~30 MB，再预压一层压不动、setup.exe 反而变大；POSIX 外层只是 gzip，重压成 xz
+    实测省 30–40%。
+    """
+    build = _load_build_module()
+    assert build._bundle_form({"url": "https://x/sing-box-1.14.3-windows-amd64.zip"}) == "archive"
+    assert build._bundle_form({"url": "https://x/sing-box-1.14.3-linux-amd64.tar.gz"}) == "xz"
+    assert (
+        build._bundle_name({"url": "https://x/sing-box-1.14.3-darwin-arm64.tar.gz"})
+        == "sing-box-1.14.3-darwin-arm64.tar.xz"
+    )
+    assert (
+        build._bundle_name({"url": "https://x/sing-box-1.14.3-windows-amd64.zip"})
+        == "sing-box-1.14.3-windows-amd64.zip"
+    )
+
+
+def test_xz_bundle_is_deterministic_and_free_of_build_traces():
+    """同一份内容重压两次必须字节相同，且元数据里不带构建机痕迹。
+
+    这是"可复算比对"的前提：不规范化（mtime/uid/uname）的话，换台机器压出来就不一样，
+    包里还会留下构建机的用户名与时间。
+    """
+    import io
+    import lzma
+    import tarfile
+
+    build = _load_build_module()
+    members = [("sing-box", b"KERNEL"), ("LICENSE", b"MIT")]
+    with tempfile.TemporaryDirectory() as tmp:
+        first = Path(tmp) / "a.tar.xz"
+        second = Path(tmp) / "b.tar.xz"
+        build._write_xz_bundle(members, first)
+        build._write_xz_bundle(list(reversed(members)), second)
+        assert first.read_bytes() == second.read_bytes(), "同一份内容重压必须字节一致"
+
+        raw = lzma.decompress(first.read_bytes())
+        with tarfile.open(fileobj=io.BytesIO(raw)) as bundle:
+            for member in bundle.getmembers():
+                assert member.mtime == 0, member.name
+                assert (member.uid, member.gid) == (0, 0), member.name
+                assert member.uname == "" and member.gname == "", member.name
+                assert member.mode == 0o644, member.name
 
 
 def test_core_manifest_covers_all_shipped_platforms_at_one_version():
@@ -92,95 +227,205 @@ def test_core_manifest_covers_all_shipped_platforms_at_one_version():
         assert version in text, f"{readme} 未提到内核版本 {version}（文档与清单不同步）"
 
 
-def test_stage_core_uses_official_when_local_version_differs():
-    """本地内核版本 ≠ 清单版本时，不许把本地旧版抄进包。
+def _stage_case(build, vendor: Path, entry: dict, local_kernel: Path | None = None):
+    """跑一次 stage_core，返回被"下载"的次数记录（fetch 打成写归档的桩）。"""
+    fetched: list[str] = []
 
-    抄进去的话 `verify_vendor_core` 会以"清单哈希不符"中止，报错还会让人去改清单——
-    真正该改的是暂存来源：版本不符就按官方 URL 下载，版本一致才直接用本地（免下载）。
+    def fake_fetch(target_entry: dict) -> None:
+        fetched.append(target_entry["version"])
+        vendor.mkdir(parents=True, exist_ok=True)
+        name = target_entry["url"].rsplit("/", 1)[-1]
+        blob = (_OFFICIAL_BLOBS.setdefault(name, b""))
+        (vendor / name).write_bytes(blob)
+
+    with (
+        patch.object(build, "VENDOR_DIR", vendor),
+        patch.object(build, "CORE_MANIFEST", {build._platform_key(): entry}),
+        patch.object(build, "fetch_official_core", fake_fetch),
+    ):
+        build.stage_core()
+    return fetched
+
+
+_OFFICIAL_BLOBS: dict[str, bytes] = {}
+
+
+def test_stage_core_reuses_only_bundle_matching_the_manifest():
+    """暂存复用与清理一律按清单哈希判定（重压后是 `.tar.xz`）。
+
+    回归背景：同一台 Mac 上先出 x64 再出 arm64，两轮文件名与内容都不同；旧逻辑
+    "见文件存在就复用"会把上一个架构的内核打进这一轮的包，校验时报的却是清单不符。
     """
     build = _load_build_module()
-    entry_version = build.CORE_MANIFEST[build._platform_key()]["version"]
-    core_name = build._core_name()
-
+    bundle_name = "sing-box-9.9.9-test-amd64.tar.xz"
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
+        seed_dir = base / "seed"
+        seed_dir.mkdir()
+        official, entry = _synthetic_archive(seed_dir, {"sing-box": b"ARM64"})
+        _OFFICIAL_BLOBS[official.name] = official.read_bytes()
+
+        # 1) 暂存为空 → 下载官方归档并重压
+        vendor = base / "vendor-empty"
+        assert _stage_case(build, vendor, entry) == ["9.9.9"]
+        assert sorted(p.name for p in vendor.iterdir()) == [bundle_name]
+        assert build._member_hashes(vendor / bundle_name) == entry["files"]
+
+        # 2) 暂存里正是本平台那一份 → 复用，不再下载
+        assert _stage_case(build, vendor, entry) == []
+
+        # 3) 同名但内容不同（另一个架构）→ 重下重压
+        (vendor / bundle_name).write_bytes(b"X86_64-BUNDLE")
+        assert _stage_case(build, vendor, entry) == ["9.9.9"]
+        assert build._member_hashes(vendor / bundle_name) == entry["files"]
+
+        # 4) 官方归档已在且校验通过 → 直接重压，不必再下载
+        vendor = base / "vendor-official"
+        vendor.mkdir()
+        (vendor / official.name).write_bytes(official.read_bytes())
+        assert _stage_case(build, vendor, entry) == []
+        assert sorted(p.name for p in vendor.iterdir()) == [bundle_name]
+
+        # 5) 另一个平台的残留 + 运行态 .json → 都清掉，只留本平台那一份
+        vendor = base / "vendor-foreign"
+        vendor.mkdir()
+        (vendor / "sing-box-9.9.9-other-platform.tar.xz").write_bytes(b"OTHER")
+        (vendor / "active_config.json").write_text('{"outbounds":[{"password":"REAL"}]}')
+        assert _stage_case(build, vendor, entry) == ["9.9.9"]
+        assert sorted(p.name for p in vendor.iterdir()) == [bundle_name]
+
+
+def test_windows_style_zip_entry_keeps_official_archive():
+    """`.zip` 条目原样随包：不重压、不换名（Windows 侧外层已经压过一遍）。"""
+    build = _load_build_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        seed_dir = base / "seed"
+        seed_dir.mkdir()
+        official, entry = _synthetic_archive(
+            seed_dir, {"sing-box.exe": b"PE"}, name="sing-box-9.9.9-test-win.zip"
+        )
+        _OFFICIAL_BLOBS[official.name] = official.read_bytes()
         vendor = base / "vendor"
-        local_dir = base / "local"
-        local_dir.mkdir()
-        (local_dir / core_name).write_bytes(b"KERNEL")
-        fetched: list[str] = []
-
-        def run(local_version: str) -> list[str]:
-            fetched.clear()
-            if vendor.exists():
-                import shutil
-
-                shutil.rmtree(vendor)
-            with (
-                patch.object(build, "VENDOR_DIR", vendor),
-                patch(
-                    "agent_channel.binary.get_local_binary_path",
-                    lambda: local_dir / core_name,
-                ),
-                patch(
-                    "agent_channel.binary.get_local_core_version",
-                    lambda: local_version,
-                ),
-                patch.object(
-                    build, "fetch_official_core", lambda entry: fetched.append(entry["version"])
-                ),
-                patch.object(build, "verify_vendor_core", lambda entry: None),
-            ):
-                build.stage_core()
-            return list(fetched)
-
-        # 版本不一致 → 走官方下载，本地旧版一步都不许进 vendor
-        got = run("v0.0.0")
-        assert got == [entry_version], f"应按官方 URL 下载 v{entry_version}，实际: {got}"
-        assert not (vendor / core_name).exists(), "本地旧版内核不该被抄进暂存目录"
-
-        # 版本一致 → 直接用本地（免下载）
-        got = run(f"v{entry_version}")
-        assert got == [], f"版本一致时不该重复下载: {got}"
-        assert (vendor / core_name).read_bytes() == b"KERNEL", "同版本地内核应被暂存"
+        assert _stage_case(build, vendor, entry) == ["9.9.9"]
+        assert sorted(p.name for p in vendor.iterdir()) == [official.name]
+        assert (vendor / official.name).read_bytes() == official.read_bytes()
 
 
-def test_stage_core_skips_runtime_state_json():
-    """从本机 bin 抄内核时，运行态 `.json`（`active_config.json` 含真实凭据）不许进暂存。
+def test_stage_core_clears_runtime_state_before_packaging():
+    """暂存里混入运行态 `.json` 时，暂存阶段就要清掉——它是凭据防线，不是洁癖。
 
-    回归背景：构建机实测发生过一次——把整个 bin 抄进暂存，连带实盘配置与真节点凭据，
-    靠 `_check_credentials` 才拦住。`.bak` 与 `.json` 都必须跳过。
+    回归背景：构建机实测发生过一次，整个 bin 被抄进暂存，连带实盘配置与真节点凭据，
+    靠 `_check_credentials` 才拦住。
     """
     build = _load_build_module()
-    entry_version = build.CORE_MANIFEST[build._platform_key()]["version"]
-    core_name = build._core_name()
-
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
+        seed_dir = base / "seed"
+        seed_dir.mkdir()
+        official, entry = _synthetic_archive(seed_dir, {"sing-box": b"KERNEL"})
+        _OFFICIAL_BLOBS[official.name] = official.read_bytes()
+
         vendor = base / "vendor"
-        local_dir = base / "local"
-        local_dir.mkdir()
-        (local_dir / core_name).write_bytes(b"KERNEL")
-        (local_dir / "active_config.json").write_text('{"outbounds":[{"password":"REAL"}]}')
-        (local_dir / f"{core_name}.v1.14.2.bak").write_bytes(b"OLD")
+        vendor.mkdir()
+        (vendor / "active_config.json").write_text('{"outbounds":[]}')
+        (vendor / "sing-box.v1.14.2.bak").write_bytes(b"OLD")
 
-        with (
-            patch.object(build, "VENDOR_DIR", vendor),
-            patch(
-                "agent_channel.binary.get_local_binary_path",
-                lambda: local_dir / core_name,
-            ),
-            patch(
-                "agent_channel.binary.get_local_core_version",
-                lambda: f"v{entry_version}",
-            ),
-            patch.object(build, "fetch_official_core", lambda entry: None),
-            patch.object(build, "verify_vendor_core", lambda entry: None),
-        ):
-            build.stage_core()
+        assert _stage_case(build, vendor, entry) == ["9.9.9"]
+        assert sorted(p.name for p in vendor.iterdir()) == [
+            "sing-box-9.9.9-test-amd64.tar.xz"
+        ]
 
-        names = sorted(p.name for p in vendor.iterdir())
-        assert names == [core_name], f"暂存目录只该有内核本体，实际: {names}"
+
+def test_target_arch_drives_manifest_key_and_artifact_tag():
+    """交叉构建时，清单取键与产物标签都必须跟着**目标**架构走。
+
+    回归背景：在 Intel Mac 上给 arm64 打包，若取键仍读宿主架构，就会从清单里拿到
+    darwin-amd64 的条目——x86_64 的官方内核被塞进 arm64 包，产物名字与内容对不上，
+    装到 Apple 芯片上直接起不来。
+    """
+    import os
+
+    build = _load_build_module()
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("AGENT_CHANNEL_TARGET_ARCH", None)
+        host_arch = build._arch_class()
+        assert build._platform_key() == f"{build._platform_key().split('-')[0]}-{host_arch}"
+
+    with patch.dict(os.environ, {"AGENT_CHANNEL_TARGET_ARCH": "arm64"}):
+        assert build._arch_class() == "arm64"
+        assert build._platform_key().endswith("-arm64")
+        assert build._platform_tag().endswith("-arm64")
+
+    with patch.dict(os.environ, {"AGENT_CHANNEL_TARGET_ARCH": "x86_64"}):
+        assert build._arch_class() == "amd64"
+        assert build._platform_key().endswith("-amd64")
+        assert build._platform_tag().endswith("-x64"), "产物标签沿用 x64 这个习惯写法"
+
+    with patch.dict(os.environ, {"AGENT_CHANNEL_TARGET_ARCH": "universal2"}):
+        try:
+            build._arch_class()
+        except SystemExit:
+            pass
+        else:
+            raise AssertionError("universal2 需要包里同时放两份内核，必须明确拒绝")
+
+
+def test_onefile_artifact_name_does_not_collide_with_onedir_dir():
+    """单文件产物名不许与目录形态同名，且必须由 spec 的 `ONEFILE_NAME` 决定。
+
+    回归背景：POSIX 没有 `.exe` 后缀，两个形态都叫 `agent-channel`，PyInstaller 的
+    `--noconfirm` 于是在构建末尾把先建好的 `dist/agent-channel/` 整个删掉换成单文件——
+    目录产物凭空消失，而日志上一切正常。
+    """
+    import os
+
+    build = _load_build_module()
+    name = build._onefile_name()
+    if os.name == "nt":
+        assert name == "agent-channel.exe", name
+    else:
+        assert name != build.APP_NAME, "单文件与目录形态同名会在 dist/ 里互相覆盖"
+
+    spec_text = Path("packaging/agent-channel.spec").read_text(encoding="utf-8")
+    assert "ONEFILE_NAME = " in spec_text, "spec 必须定义 ONEFILE_NAME"
+    assert "name=ONEFILE_NAME" in spec_text, "单文件形态必须用 ONEFILE_NAME 命名"
+
+
+def test_package_tarball_layout_is_the_documented_shape():
+    """tar.gz 的形态是用户直接看到的：顶层 `agent-channel/`，同级 install.sh 与菜单文件。"""
+    import tarfile
+
+    build = _load_build_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        dist = base / "dist"
+        (dist / "agent-channel").mkdir(parents=True)
+        (dist / "agent-channel" / "agent-channel").write_bytes(b"BIN")
+        root = base / "root"
+        (root / "packaging" / "assets").mkdir(parents=True)
+        (root / "packaging" / "install.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        (root / "packaging" / "assets" / "agent-channel.desktop").write_text(
+            "[Desktop Entry]\n", encoding="utf-8"
+        )
+        (root / "packaging" / "assets" / "icon-512.png").write_bytes(b"PNG")
+
+        with patch.object(build, "DIST_DIR", dist), patch.object(build, "ROOT", root):
+            archive = build.package_tarball()
+
+        assert archive is not None, "应产出 tar.gz"
+        with tarfile.open(archive) as tar:
+            names = sorted(tar.getnames())
+            modes = {member.name: member.mode for member in tar.getmembers()}
+        # 菜单项与图标只对 Linux 有意义（macOS 由 .app 自带），期望值必须跟着平台走：
+        # 写死 Linux 那一套会在 macOS runner 上必红（CI 上实测踩到过）。
+        import sys
+
+        expected = ["agent-channel/agent-channel", "install.sh"]
+        if sys.platform != "darwin":
+            expected += ["agent-channel.desktop", "agent-channel.png"]
+        assert names == sorted(expected), names
+        assert modes["install.sh"] == 0o755, "安装脚本必须带可执行位"
 
 
 def test_verify_vendor_core_rejects_runtime_state():
@@ -201,3 +446,165 @@ def test_verify_vendor_core_rejects_runtime_state():
                 assert "运行态" in str(exc), exc
                 return
         raise AssertionError("暂存目录含 active_config.json 时必须中止打包")
+
+
+def _ar(members: list[tuple[str, bytes]]) -> bytes:
+    """拼一个 ar 容器（`.deb` 就是 ar），供凭据扫描用例构造最小 `.deb`。"""
+    out = bytearray(b"!<arch>\n")
+    for name, blob in members:
+        header = (
+            f"{name + '/':<16}{0:<12}{0:<6}{0:<6}{'100644':<8}{len(blob):<10}`\n"
+        )
+        out += header.encode("ascii")
+        out += blob
+        if len(blob) % 2:
+            out += b"\n"
+    return bytes(out)
+
+
+def test_extract_official_archive_handles_tar_gz_and_zip():
+    """官方归档在 POSIX 上是 `.tar.gz`：只按 zip 解，Linux/macOS 打包连构建那步都到不了。
+
+    回归背景：官方 windows 资产是 zip、linux/darwin 资产是 tar.gz，而 `fetch_official_core`
+    原先写死 `zipfile`。解包口径：只取**纯文件名**扁平落盘，归档里的目录层级与链接都不进暂存。
+    """
+    import io
+    import tarfile
+    import zipfile
+
+    build = _load_build_module()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp)
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+            payload = b"KERNEL"
+            info = tarfile.TarInfo("sing-box-1.14.3-linux-amd64/sing-box")
+            info.size = len(payload)
+            info.mode = 0o755
+            tar.addfile(info, io.BytesIO(payload))
+            link = tarfile.TarInfo("sing-box-1.14.3-linux-amd64/evil-link")
+            link.type = tarfile.SYMTYPE
+            link.linkname = "/etc/passwd"
+            tar.addfile(link)
+        build._extract_official_archive(
+            buffer.getvalue(),
+            "https://example.invalid/sing-box-1.14.3-linux-amd64.tar.gz",
+            target,
+        )
+        assert sorted(p.name for p in target.iterdir()) == ["sing-box"], "只该解出内核本体"
+        assert (target / "sing-box").read_bytes() == b"KERNEL"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        target = base / "vendor"
+        target.mkdir()
+        zip_path = base / "core.zip"
+        with zipfile.ZipFile(zip_path, "w") as archive:
+            archive.writestr("sing-box-1.14.3-windows-amd64/sing-box.exe", b"PE")
+            archive.writestr("sing-box-1.14.3-windows-amd64/libcronet.dll", b"DLL")
+        build._extract_official_archive(zip_path.read_bytes(), str(zip_path), target)
+        assert sorted(p.name for p in target.iterdir()) == [
+            "libcronet.dll",
+            "sing-box.exe",
+        ], "zip 那条路径不能被改坏"
+
+    try:
+        build._extract_official_archive(b"x", "https://example.invalid/core.7z", target)
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("认不出的归档格式必须中止打包")
+
+
+def test_verify_no_secrets_scans_inside_tar_gz_and_deb():
+    """凭据扫描要**进压缩包**：漏了 tar.gz/.deb，等于对 POSIX 产物根本没查。
+
+    回归背景：`verify_no_secrets` 原先只解 `.zip`，而 POSIX 的分发形态是 tar.gz 与 .deb。
+    """
+    import io
+    import tarfile
+
+    build = _load_build_module()
+    secret = "SUBSCRIPTION-SECRET-abcdef"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        tarball = base / "agent-channel-0.1.0-linux-x64.tar.gz"
+        with tarfile.open(tarball, "w:gz") as tar:
+            payload = f"node_uri={secret}".encode()
+            info = tarfile.TarInfo("agent-channel/state.txt")
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode="w:gz") as tar:
+            payload = f"subscription_url={secret}".encode()
+            info = tarfile.TarInfo("./usr/lib/agent-channel/state.txt")
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+        deb = base / "agent-channel_0.1.0_amd64.deb"
+        deb.write_bytes(
+            _ar([("debian-binary", b"2.0\n"), ("data.tar.gz", data.getvalue())])
+        )
+
+        with patch.object(build, "collect_secrets", lambda: [secret]):
+            for path in (tarball, deb):
+                hits = build.verify_no_secrets(path)
+                assert hits == [secret], f"{path.name} 里的凭据没被查到: {hits}"
+        with patch.object(build, "collect_secrets", lambda: ["NOT-IN-PACKAGE-0123456"]):
+            assert build.verify_no_secrets(tarball) == [], "不该误报不在包里的凭据"
+
+
+def test_deb_control_declares_glibc_floor_and_field_order():
+    """`.deb` 的依赖要带 glibc 下限，且 Description 必须是最后一个字段。
+
+    下限写进依赖，老发行版在 apt 阶段就被明确拒绝，而不是装完才报加载器错误；
+    而 dpkg 把 Description 之后的续行都算它的正文，`Installed-Size` 放到后面会被吞掉。
+    """
+    build = _load_build_module()
+    text = build._deb_control("0.1.0", "amd64", 12345)
+    assert f"Depends: libc6 (>= {build.POSIX_GLIBC_FLOOR})" in text
+    assert "Installed-Size: 12345" in text
+    assert text.index("Installed-Size") < text.index("Description:")
+    assert text.endswith("\n")
+
+
+def test_window_toolkit_detection_and_macos_assertion():
+    """macOS 承诺有原生窗口：产物里缺 Tcl/Tk 必须让构建失败，而不是静默退化。
+
+    现实教训：Linux 产物就是"构建环境没装 Tcl/Tk → 窗口没了、只剩浏览器面板"的样子；
+    那是 Linux 的选择，但同样的事发生在 macOS 上就是缺陷——所以这里断言。
+    """
+    build = _load_build_module()
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = Path(tmp)
+        (tree / "Contents" / "Frameworks").mkdir(parents=True)
+        try:
+            build.assert_window_toolkit(tree)
+        except SystemExit as exc:
+            assert "没有 Tcl/Tk" in str(exc), exc
+        else:
+            raise AssertionError("缺 Tcl/Tk 时必须中止 macOS 打包")
+
+        (tree / "Contents" / "Frameworks" / "libtcl9.0.dylib").write_bytes(b"TCL")
+        (tree / "Contents" / "Frameworks" / "_tkinter.cpython-310-darwin.so").write_bytes(b"TK")
+        build.assert_window_toolkit(tree)  # 有了就放行
+        assert len(build._window_toolkit_items(tree)) == 2
+
+        build.report_window_toolkit(tree)  # 非 macOS 侧只报告，不抛
+
+
+def test_quit_hint_is_printed_when_there_is_no_window(tmp_path=None):
+    """没有窗口的平台要明说"关掉浏览器标签不等于退出"，否则用户以为已经关了。"""
+    import io
+    from contextlib import redirect_stdout
+
+    from agent_channel import window
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        window.print_quit_hint()
+    text = buf.getvalue()
+    assert "退出程序" in text and "Ctrl-C" in text, text
+    assert "关掉浏览器标签不会退出进程" in text, text

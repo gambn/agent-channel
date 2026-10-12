@@ -10,6 +10,7 @@ import socket
 import socketserver
 import sys
 import threading
+import time
 import webbrowser
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,7 @@ from .core import (
     enable_channel,
     get_channel_status,
     heal_stale_state,
+    shutdown_app,
 )
 from .parsers import parse_singbox_json
 from .probe import geolocate_via_proxy, test_single_endpoint
@@ -166,6 +168,12 @@ def _outbound_options(source: str | None = None) -> dict[str, Any]:
 
 
 # 静态资源白名单：只暴露这几个文件，从根上杜绝路径穿越
+# 本进程起的面板服务句柄，以及跑 serve_forever 的那个线程：退出路径要用它们把服务关掉
+# （见 `stop_ui_server`，同一线程里关自己会死锁）。
+_UI_SERVER: Any = None
+_UI_SERVER_THREAD: Any = None
+
+
 _STATIC_ROUTES: dict[str, str] = {
     "/": "index.html",
     "/index.html": "index.html",
@@ -377,6 +385,8 @@ class ChannelRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_import_nodes(payload)
         elif self.path == "/api/set_outbound":
             self._handle_set_outbound(payload)
+        elif self.path == "/api/quit":
+            self._handle_quit()
         else:
             self.send_error(404, "Not Found")
 
@@ -527,6 +537,20 @@ class ChannelRequestHandler(http.server.BaseHTTPRequestHandler):
             payload["note"] = "通道未运行，以下为直连结果，不代表通道可用"
         self._send_json(payload)
 
+    def _handle_quit(self) -> None:
+        """退出整套程序：先回响应，再在后台线程里走与托盘「退出」同一套清理。
+
+        顺序不能反：`shutdown_app()` 会把这个 HTTP 服务也关掉，若在请求线程里先关服务，
+        客户端就拿不到这次响应，面板会显示成一个没有反馈的按钮。
+        """
+        self._send_json({"status": "quitting", "message": "正在停止通道并退出…"})
+
+        def _quit_soon() -> None:
+            time.sleep(0.3)  # 留给响应发出去
+            shutdown_app()
+
+        threading.Thread(target=_quit_soon, daemon=True).start()
+
     def _handle_geolocation(self) -> None:
         """探测落地 IP 的地理位置与天气（走当前通道代理，反映节点出口的真实落地）。"""
         try:
@@ -655,13 +679,32 @@ def _is_port_free(port: int) -> bool:
     return True
 
 
+class PanelHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    """面板的 HTTP 服务。
+
+    `handle_error` 有意收窄：客户端提前断开（关标签页、`curl --max-time` 到点、
+    3 秒轮询被打断）会让写入抛 `BrokenPipeError`/`ConnectionResetError`——这是常态，
+    不是错误；原样走 `socketserver` 默认实现会把整段回溯刷进日志，把真正的故障淹掉。
+    其它异常照旧按默认行为打印回溯。
+    """
+
+    daemon_threads = True
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def launch_ui(
     port: int = DEFAULT_UI_PORT, open_browser: bool = True, block: bool = False
-) -> None:
-    """启动本地控制面板；端口被占用时自动改用空闲端口。"""
+) -> str:
+    """启动本地控制面板；端口被占用时自动改用空闲端口。返回面板地址。
 
-    class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
-        daemon_threads = True
+    返回地址是给外层外壳窗口用的（窗口要显示"在浏览器中打开"的真实端口，
+    端口被占用时这个值会与传入的不同）。
+    """
 
     # 首次启动时把随包预置的内核播种到本地目录，使面板/通道开箱可用
     ensure_local_core()
@@ -676,18 +719,53 @@ def launch_ui(
 
     if not _is_port_free(port):
         port = get_free_port()
-    server = ThreadingHTTPServer(("127.0.0.1", port), ChannelRequestHandler)
+    server = PanelHTTPServer(("127.0.0.1", port), ChannelRequestHandler)
+    global _UI_SERVER
+    _UI_SERVER = server
 
     url = f"http://127.0.0.1:{port}"
-    print(f"[agent-channel通道代理] 控制与测试面板已启动: {url}")
+    print(f"[agent-channel通道代理] 控制与测试面板已启动: {url}", flush=True)
 
     if open_browser:
         webbrowser.open(url)
 
+    global _UI_SERVER_THREAD
     if block:
+        _UI_SERVER_THREAD = threading.current_thread()
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             server.shutdown()
     else:
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        _UI_SERVER_THREAD = worker
+        worker.start()
+    return url
+
+
+def _close_ui_server(server: Any) -> None:
+    try:
+        server.shutdown()
+        server.server_close()
+    except Exception as exc:  # 关不掉也要继续退出流程
+        warn_stderr(f"关闭面板服务失败（忽略）: {exc}")
+
+
+def stop_ui_server() -> bool:
+    """关掉本进程起的面板服务；返回是否确实关掉了一个。
+
+    `shutdown()` 要等 serve_forever 的循环退出，所以**不能**由正在跑那个循环的线程来调：
+    SIGTERM 处理器就正好在主线程上，而主线程此刻卡在 serve_forever 里，直接等会死锁
+    （实测：面板端口释放不掉、进程也不退出）。这种情况交给后台线程收尾，本线程继续往上
+    抛 SystemExit 结束进程。
+    """
+    global _UI_SERVER, _UI_SERVER_THREAD
+    server, _UI_SERVER = _UI_SERVER, None
+    serving_thread, _UI_SERVER_THREAD = _UI_SERVER_THREAD, None
+    if server is None:
+        return False
+    if serving_thread is threading.current_thread():
+        threading.Thread(target=_close_ui_server, args=(server,), daemon=True).start()
+        return True
+    _close_ui_server(server)
+    return True

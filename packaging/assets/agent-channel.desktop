@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=agent-channel 通道代理
+Comment=本地 sing-box 通道代理：一键启用通道并打开控制面板
+Exec=agent-channel ui
+Icon=agent-channel
+Terminal=false
+Categories=Network;Utility;
+Keywords=sing-box;proxy;AI;channel;
+StartupNotify=false

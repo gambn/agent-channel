@@ -71,3 +71,21 @@ def get_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def configure_stdio() -> None:
+    """把标准输出/错误设成行缓冲。
+
+    为什么需要：冻结产物（PyInstaller）的 stdout 被重定向到文件或管道时是**块缓冲**，
+    实测 `PYTHONUNBUFFERED=1` 也压不住——启动横幅要等进程退出才刷出来，用户看不到面板
+    地址，任何"grep 日志找端口"的脚本都会误判。这里显式设成行缓冲，入口处调一次。
+
+    窗口模式（Windows 托盘 / macOS 外壳）下 stdio 可能是 None 或不支持 reconfigure，
+    所以一律容错：设不上就算了，绝不让它影响启动。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        with suppress(Exception):
+            reconfigure(line_buffering=True)

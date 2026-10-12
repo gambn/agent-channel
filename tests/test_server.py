@@ -1234,3 +1234,52 @@ def test_api_config_reports_save_failure_reason():
         data = _post_json("/api/config", base, {"mode": "node"})
     assert not data.get("success"), data
     assert data.get("error") == "磁盘只读", data
+
+
+def test_quit_endpoint_responds_then_shuts_down():
+    """`/api/quit` 必须先回响应再退出：在请求线程里先关服务，客户端拿不到反馈。
+
+    真正的退出（停通道/还原系统代理/关面板）走 `core.shutdown_app`，这里把它打桩，
+    只验"接口被正确触发、且确实排了一次退出"。
+    """
+    test_port = get_free_port()
+    _launch_panel(test_port)
+    time.sleep(0.3)
+    base = f"http://127.0.0.1:{test_port}"
+
+    calls: list[str] = []
+    with patch("agent_channel.server.shutdown_app", lambda *a, **k: calls.append("quit")):
+        status, payload = _post_status("/api/quit", base, {})
+        assert status == 200, status
+        assert payload.get("status") == "quitting", payload
+        # 退出排在后台线程里（先给响应留出时间）
+        for _ in range(20):
+            if calls:
+                break
+            time.sleep(0.1)
+    assert calls == ["quit"], f"退出没有被触发: {calls}"
+
+
+def test_quit_endpoint_rejects_cross_site():
+    """能终止程序的接口同样受跨站守卫保护：外站 Origin 必须 403。"""
+    test_port = get_free_port()
+    _launch_panel(test_port)
+    time.sleep(0.3)
+    base = f"http://127.0.0.1:{test_port}"
+
+    req = urllib.request.Request(
+        f"{base}/api/quit",
+        data=b"{}",
+        headers={
+            "Content-Type": "application/json",
+            "Origin": "https://evil.example",
+            "Referer": "https://evil.example/",
+        },
+    )
+    with patch("agent_channel.server.shutdown_app", lambda *a, **k: None):
+        try:
+            urllib.request.urlopen(req, timeout=5)
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 403, exc.code
+        else:
+            raise AssertionError("跨站 Origin 调 /api/quit 必须被拒")

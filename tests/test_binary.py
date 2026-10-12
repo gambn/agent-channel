@@ -1,4 +1,5 @@
 import hashlib
+import os
 import tempfile
 import zipfile
 from pathlib import Path
@@ -12,35 +13,101 @@ def test_get_local_binary_path():
     assert get_local_binary_path().name.lower() in allowed
 
 
-def test_ensure_local_core_seeds_companion_files():
-    """随包播种内核时必须一并播伴生文件（libcronet.dll）：
-    缺它时含 naive 出站的配置会让内核在初始化 outbound[0] 时 FATAL 退出。"""
+def _bundled_archive(
+    tmp_dir: Path, members: dict[str, bytes], suffix: str = ".tar.xz"
+) -> Path:
+    """按随包形态造一个归档（外层目录 + 平铺文件名）。
+
+    POSIX 侧随包的是重压后的 `.tar.xz`（官方归档先验真再重压），这里两种后缀都测，
+    因为解包路径要同时认它们。
+    """
+    import io
+    import tarfile
+
+    inner = tmp_dir / f"sing-box-1.14.3-test{suffix}"
+    mode = "w:xz" if suffix.endswith(".xz") else "w:gz"
+    with tarfile.open(inner, mode) as archive:
+        for name, body in members.items():
+            info = tarfile.TarInfo(f"sing-box-1.14.3-test/{name}")
+            info.size = len(body)
+            info.mode = 0o755
+            archive.addfile(info, io.BytesIO(body))
+    return inner
+
+
+def test_ensure_local_core_seeds_from_bundled_xz():
+    """POSIX 随包的是 `.tar.xz`（官方归档重压）：解包路径必须认它，并解出可执行位。"""
+    _assert_seeds_from_bundled_archive(".tar.xz")
+
+
+def test_ensure_local_core_seeds_from_bundled_gz():
+    """`.tar.gz` 形态仍要能用（Windows 侧是 zip，POSIX 历史包是 tar.gz）。"""
+    _assert_seeds_from_bundled_archive(".tar.gz")
+
+
+def _assert_seeds_from_bundled_archive(suffix: str) -> None:
     from unittest.mock import patch
 
     from agent_channel import binary
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
-        bundle = tmp_dir / "bundle"
-        bundle.mkdir()
-        (bundle / binary._core_filename()).write_bytes(b"KERNEL")
-        (bundle / "libcronet.dll").write_bytes(b"DLL")
-        (bundle / "LICENSE").write_bytes(b"MIT")
-        # .bak 备份不应被播种（曾在真机播种实验里被带入本地 bin）
-        (bundle / (binary._core_filename() + ".v1.14.2.bak")).write_bytes(b"OLD")
-        local_bin = tmp_dir / "local_bin"
+        archive = _bundled_archive(
+            tmp_dir,
+            {
+                binary._core_filename(): b"KERNEL",
+                "libcronet.so": b"SO",
+                "LICENSE": b"MIT",
+            },
+            suffix=suffix,
+        )
+        local_bin = tmp_dir / "local_bin" / "bin"
         target = local_bin / binary._core_filename()
         with (
-            patch.object(binary, "get_bundled_core_dir", lambda: bundle),
+            patch.object(binary, "get_bundled_core_archive", lambda: archive),
             patch.object(binary, "get_local_binary_path", lambda: target),
         ):
             assert binary.ensure_local_core()
             assert target.read_bytes() == b"KERNEL"
-            assert (local_bin / "libcronet.dll").read_bytes() == b"DLL"
+            assert (local_bin / "libcronet.so").read_bytes() == b"SO"
+            if os.name != "nt":
+                assert os.access(target, os.X_OK), "解出的内核必须有可执行位"
+
+
+def test_ensure_local_core_seeds_from_bundled_archive():
+    """随包预置的是官方归档：首次启动解出内核与伴生文件（libcronet 缺了 naive 会 FATAL）。
+
+    形态取舍见 `binary.get_bundled_core_archive()`：包里放压缩归档而不是解开的二进制，
+    是为了让"包内内核 == 官方资产"在 macOS 上也能按 sha256 核验（.app 会重签嵌套的
+     Mach-O，解开的二进制就没法这么查了）。
+    """
+    from unittest.mock import patch
+
+    from agent_channel import binary
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        archive = _bundled_archive(
+            tmp_dir,
+            {
+                binary._core_filename(): b"KERNEL",
+                "libcronet.so": b"SO",
+                "LICENSE": b"MIT",
+            },
+        )
+        local_bin = tmp_dir / "local_bin" / "bin"
+        target = local_bin / binary._core_filename()
+        with (
+            patch.object(binary, "get_bundled_core_archive", lambda: archive),
+            patch.object(binary, "get_local_binary_path", lambda: target),
+        ):
+            assert binary.ensure_local_core()
+            assert target.read_bytes() == b"KERNEL"
+            assert (local_bin / "libcronet.so").read_bytes() == b"SO"
             assert (local_bin / "LICENSE").read_bytes() == b"MIT"
-            assert not (
-                local_bin / (binary._core_filename() + ".v1.14.2.bak")
-            ).exists(), "备份文件不该被播种"
+            assert not (local_bin / ".seed-x").exists(), "临时目录必须清干净"
+            if os.name != "nt":
+                assert os.access(target, os.X_OK), "解出的内核必须有可执行位"
 
 
 def test_ensure_local_core_fills_missing_companion():
@@ -51,23 +118,41 @@ def test_ensure_local_core_fills_missing_companion():
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
-        bundle = tmp_dir / "bundle"
-        bundle.mkdir()
-        (bundle / binary._core_filename()).write_bytes(b"NEW-KERNEL")
-        (bundle / "libcronet.dll").write_bytes(b"DLL")
-        local_bin = tmp_dir / "local_bin"
-        local_bin.mkdir()
+        archive = _bundled_archive(
+            tmp_dir,
+            {binary._core_filename(): b"NEW-KERNEL", "libcronet.so": b"SO"},
+        )
+        local_bin = tmp_dir / "local_bin" / "bin"
+        local_bin.mkdir(parents=True)
         target = local_bin / binary._core_filename()
         target.write_bytes(b"USER-KERNEL")
         with (
-            patch.object(binary, "get_bundled_core_dir", lambda: bundle),
+            patch.object(binary, "get_bundled_core_archive", lambda: archive),
             patch.object(binary, "get_local_binary_path", lambda: target),
         ):
             assert binary.ensure_local_core()
             # 已有内核不被覆盖（不降级用户手动更新的版本）
             assert target.read_bytes() == b"USER-KERNEL"
             # 缺失的伴生文件被补齐
-            assert (local_bin / "libcronet.dll").read_bytes() == b"DLL"
+            assert (local_bin / "libcronet.so").read_bytes() == b"SO"
+
+
+def test_ensure_local_core_without_bundled_archive_only_reports_state():
+    """包里没预置内核时，本函数只如实报告本地是否已有内核，不去联网下载。"""
+    from unittest.mock import patch
+
+    from agent_channel import binary
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = Path(tmp) / "bin" / binary._core_filename()
+        with (
+            patch.object(binary, "get_bundled_core_archive", lambda: None),
+            patch.object(binary, "get_local_binary_path", lambda: target),
+        ):
+            assert not binary.ensure_local_core()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"KERNEL")
+            assert binary.ensure_local_core()
 
 
 def test_verify_sha256():

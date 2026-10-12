@@ -1,4 +1,7 @@
 import atexit
+import os
+import signal
+import sys
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -390,10 +393,87 @@ def disable_channel() -> None:
         _disable_channel()
 
 
-def _shutdown_channel() -> None:
-    """退出时的清理入口：等在跑的启停操作结束后再收尾（见 `disable_channel`）。"""
-    with _CHANNEL_LOCK:
-        _disable_channel()
+def _shutdown_channel(timeout: float | None = None) -> None:
+    """退出时的清理入口：等在跑的启停操作结束后再收尾（见 `disable_channel`）。
+
+    `timeout` 只给"用户按了关闭/退出"这类交互路径用：启停一次最长可能要一分钟（拉订阅 +
+    逐个候选实测转发），窗口不该为此冻住一分钟。等不到就如实说一声并继续退出，
+    残留由下次启动的 `heal_stale_state` 自愈；atexit 那条路仍然无限等（进程已经没别的事做）。
+    """
+    if timeout is None:
+        with _CHANNEL_LOCK:
+            _disable_channel()
+        return
+    if _CHANNEL_LOCK.acquire(timeout=timeout):
+        try:
+            _disable_channel()
+        finally:
+            _CHANNEL_LOCK.release()
+    else:
+        warn_stderr(
+            f"有通道操作仍在进行，已等待 {timeout:.0f} 秒；先退出，残留由下次启动自愈"
+        )
+
+
+# 用户主动退出时最多等多久（见 `_shutdown_channel`）
+SHUTDOWN_WAIT_SECONDS = 10.0
+
+# 清理只做一次：关闭入口可能同时被面板请求、信号、atexit 触发
+_APP_SHUTDOWN_DONE = False
+
+
+def shutdown_app(exit_code: int = 0) -> None:
+    """退出整套程序：停通道、还原系统代理、关掉面板服务，然后结束本进程。
+
+    托盘「退出」、面板「退出」、SIGTERM/SIGINT 三条入口共用这一份实现——各写一遍必然
+    漏掉某一步，最典型的是忘了还原系统代理，把用户留在"系统代理指向死端口"的状态里。
+
+    幂等：重复调用只清理一次。在主线程里调用会抛 `SystemExit` 让调用方自然返回
+    （窗口关掉 → mainloop 返回 → 进程正常退出）；在工作线程（HTTP 请求线程）里没有
+    "返回"可言，清理完直接 `os._exit`。
+    """
+    global _APP_SHUTDOWN_DONE
+    first = not _APP_SHUTDOWN_DONE
+    _APP_SHUTDOWN_DONE = True
+    if first:
+        _shutdown_channel(timeout=SHUTDOWN_WAIT_SECONDS)
+        from .server import stop_ui_server
+
+        stop_ui_server()
+        with suppress(Exception):
+            sys.stdout.flush()
+            sys.stderr.flush()
+    if threading.current_thread() is threading.main_thread():
+        raise SystemExit(exit_code)
+    os._exit(exit_code)
+
+
+def _exit_signal_names() -> list[str]:
+    """要接管的退出信号名。Windows 上只有 SIGINT（见 `install_exit_handlers`）。"""
+    return ["SIGINT"] if os.name == "nt" else ["SIGTERM", "SIGINT"]
+
+
+def install_exit_handlers() -> list[str]:
+    """把"被外部要求退出"接到同一套清理上：SIGTERM（Dock 右键退出、kill）与 SIGINT。
+
+    返回实际装上的信号名，便于调用方与测试断言。Windows 上只装 SIGINT：那边 SIGTERM
+    既不可靠也不是用户会走的路径，托盘「退出」才是正式入口。
+
+    注意 Python 只在主线程的字节码边界跑信号处理器：主线程若长时间阻塞在 C 代码里，
+    处理器要等到下一次回到 Python 才执行（Tk 窗口循环因此配了每秒一次的定时回调）。
+    """
+    installed: list[str] = []
+    for name in _exit_signal_names():
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, lambda *_: shutdown_app())
+        except (ValueError, OSError):
+            # 非主线程里注册信号会 ValueError：装不上就如实跳过，不假装成功
+            continue
+        installed.append(name)
+    return installed
 
 
 def _disable_channel() -> None:

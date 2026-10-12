@@ -132,7 +132,15 @@ export HTTPS_PROXY=http://127.0.0.1:20849
 
 - **Linux `.deb`（x86_64）**：`sudo apt install ./agent-channel_0.1.0_amd64.deb`
 - **通用 tar.gz（Linux / macOS）**：解包后执行 `./install.sh` —— 装到 `~/.local/opt/agent-channel`、命令软链到 `~/.local/bin`，**不需要 root**；`./install.sh --uninstall` 卸载（保留 `~/.agent_channel` 里的配置与内核）
-- 两种包都**内置官方编译的 sing-box 内核**，装完即用，不依赖系统 Python
+- **macOS `.dmg`（x64 / arm64 各一份）**：打开后把 `agent-channel.app` 拖进「应用程序」
+- 三种包都**内置官方编译的 sing-box 内核**，装完即用，不依赖系统 Python
+
+> **macOS 首次打开的提示**：包是临时（ad-hoc）签名、未做 Apple 公证，所以从浏览器下载后
+> 第一次打开会被 Gatekeeper 拦下，提示"无法验证开发者"或"已损坏"。两条路都可以：
+> **tar.gz 那条**由 `install.sh` 自动摘掉 quarantine 标记，解包安装后可直接打开；
+> **dmg 那条**装上后到「系统设置 → 隐私与安全性」点一次"仍要打开"（macOS 15 起没有
+> 右键→打开的绕行），或者对 app 执行 `xattr -dr com.apple.quarantine /Applications/agent-channel.app`。
+> 之后每次打开都不再拦。
 
 **B. 源码安装（开发者路线）**
 
@@ -162,7 +170,7 @@ python3.12 -m venv .venv
 
 三点说明（都是代码事实）：
 
-- 非 Windows **没有托盘图标**；「启动/停止通道」「退出并还原系统代理」改用 CLI 的 `start` / `stop`。
+- 非 Windows **没有托盘图标**；「启动/停止通道」「退出并还原系统代理」改用 CLI 的 `start` / `stop`，或面板里的按钮。
 - macOS 首次运行可能要给终端「网络」权限；Linux 的系统代理（`gsettings`）只对遵循 GNOME 代理规范的桌面生效（GNOME / Cinnamon / MATE），KDE 等需手动把代理指向 `127.0.0.1:20849`。
 - 内核下载走 `api.github.com`，无法访问 GitHub 的网络需先解决（与 Windows 相同）。
 
@@ -184,7 +192,9 @@ python3.12 -m venv .venv
 
 ## 七、托盘图标（Windows）
 
-程序运行时托盘常驻一个图标，**右键**有菜单：**打开控制面板** / **启动通道** / **停止通道** / **退出**（退出会还原系统代理）。**双击**图标 = 打开控制面板。macOS / Linux 上没有托盘，启动即打开面板。
+程序运行时托盘常驻一个图标，**右键**有菜单：**打开控制面板** / **启动通道** / **停止通道** / **退出**（退出会还原系统代理）。**双击**图标 = 打开控制面板。
+
+三个平台的入口按各自习惯来：**Windows** 是系统托盘；**macOS** 是原生窗口（红叉 = 停止通道、还原系统代理、退出；按钮里的「退出」同效）；**Linux** 是 CLI + 浏览器面板——没有原生窗口，退出请用**面板底部的「退出程序」按钮**或 Ctrl-C，**关掉浏览器标签不会退出进程**。
 
 ## 八、命令行用法
 
