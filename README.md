@@ -57,7 +57,7 @@ export HTTPS_PROXY=http://127.0.0.1:20849
 两点如实说明：
 
 - **导入≠启用**：导入只把节点放进 `json` 槽的候选池，**不会改当前来源**；要真正启用，得显式选一次来源。
-- **`naive` 需要伴生库**：Windows 与 Linux 上，内核从官方包解出时会一并安装伴生库（`libcronet.dll` / `libcronet.so`）；若你的旧版本曾失败过，重装一次内核即可。**macOS 上 `naive` 用不了**——官方 darwin 内核的包里没有 cronet 伴生库（x64 与 arm64 两份都没有），这是内核侧的限制，不是本工具没适配。
+- **`naive` 与伴生库**：Windows 与 Linux 的官方内核是 purego 形态，运行时旁边必须有 `libcronet.dll` / `libcronet.so`——本工具从官方归档解出内核时会把它们一并补齐（缺了它，内核会在初始化 naive 出站时直接失败）。**macOS 没有这个文件，但 `naive` 照常可用**：官方 darwin 内核用 CGO 把 cronet 静态链进了二进制，所以它的归档里只有 `sing-box` 与 `LICENSE`；这是两种链接方式的差异，不是 macOS 缺功能。
 
 ## 三、来源与出站选择：三个槽位，各自独立
 

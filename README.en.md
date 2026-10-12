@@ -55,7 +55,7 @@ Nodes can be loaded in three shapes, all handled by the parser:
 Two things stated plainly:
 
 - **Import is not enable**: importing only fills the `json` slot's candidate pool; it **does not change the current source**. To actually use those nodes, select a source explicitly.
-- **`naive` needs a companion library**: on Windows and Linux the kernel installs one alongside itself (`libcronet.dll` / `libcronet.so`) when unpacked from the official archive. If an older version of this tool failed on naive, reinstall the kernel once. **On macOS `naive` is unavailable** — the official darwin archive ships no cronet companion (neither the x64 nor the arm64 one). That is a limitation of the kernel build, not something this tool left unadapted.
+- **`naive` and its companion library**: the official Windows and Linux kernels use the purego build, which needs `libcronet.dll` / `libcronet.so` sitting next to it at runtime — this tool unpacks them from the official archive along with the kernel (without it, the kernel fails outright while initializing a naive outbound). **macOS has no such file and `naive` still works there**: the official darwin kernel links cronet statically into the binary with CGO, which is why its archive contains only `sing-box` and `LICENSE`. That is a difference in linking, not a missing feature.
 
 ## 3. Sources and outbound selection: three slots, kept independent
 
