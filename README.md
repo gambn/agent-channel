@@ -57,7 +57,7 @@ export HTTPS_PROXY=http://127.0.0.1:20849
 两点如实说明：
 
 - **导入≠启用**：导入只把节点放进 `json` 槽的候选池，**不会改当前来源**；要真正启用，得显式选一次来源。
-- **`naive` 需要伴生库**：内核从官方包解出时会一并安装 `libcronet.dll`；若你的旧版本曾失败过，重装一次内核即可。
+- **`naive` 需要伴生库**：Windows 与 Linux 上，内核从官方包解出时会一并安装伴生库（`libcronet.dll` / `libcronet.so`）；若你的旧版本曾失败过，重装一次内核即可。**macOS 上 `naive` 用不了**——官方 darwin 内核的包里没有 cronet 伴生库（x64 与 arm64 两份都没有），这是内核侧的限制，不是本工具没适配。
 
 ## 三、来源与出站选择：三个槽位，各自独立
 
@@ -122,7 +122,7 @@ export HTTPS_PROXY=http://127.0.0.1:20849
 ### Windows：免安装 zip / 精简单文件
 
 - **zip 版**：解压到任意目录（路径避免特殊字符），双击 `agent-channel.exe`；已内置内核，离线可用。
-- **单文件版**（约 10 MB）：**不含内核**，首次运行会自动联网下载官方包（约 33 MB，解压后约 91 MB），期间界面可能看起来没反应，等它下完即可。
+- **单文件版**（约 10 MB）：**不含内核**，首次运行会自动联网下载官方包（约 33 MB，解压后约 91 MB），期间界面可能看起来没反应，等它下完即可。**这个形态目前不在 Releases 里**——同名的单文件在不同平台上内容不同，发布面只放各平台独立的包；要单文件就用 §十 的 `--no-core` 自己打一个。
 
 ### macOS / Linux
 
@@ -134,6 +134,8 @@ export HTTPS_PROXY=http://127.0.0.1:20849
 - **通用 tar.gz（Linux / macOS）**：解包后执行 `./install.sh` —— 装到 `~/.local/opt/agent-channel`、命令软链到 `~/.local/bin`，**不需要 root**；`./install.sh --uninstall` 卸载（保留 `~/.agent_channel` 里的配置与内核）
 - **macOS `.dmg`（x64 / arm64 各一份）**：打开后把 `agent-channel.app` 拖进「应用程序」
 - 三种包都**内置官方编译的 sing-box 内核**，装完即用，不依赖系统 Python
+
+> **Linux 的 glibc 要求**：`.deb` 与 tar.gz 都要求 **glibc ≥ 2.31**（Ubuntu 20.04+ / Debian 11+、RHEL 9+）。随包的解释器与内核都在 Debian 11 环境里构建，更老的发行版会在启动时报 `GLIBC_2.xx not found`；`.deb` 里也按这个下限声明了 `libc6 (>= 2.31)`。
 
 > **macOS 首次打开的提示**：包是临时（ad-hoc）签名、未做 Apple 公证，所以从浏览器下载后
 > 第一次打开会被 Gatekeeper 拦下，提示"无法验证开发者"或"已损坏"。两条路都可以：

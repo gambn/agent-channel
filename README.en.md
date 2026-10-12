@@ -55,7 +55,7 @@ Nodes can be loaded in three shapes, all handled by the parser:
 Two things stated plainly:
 
 - **Import is not enable**: importing only fills the `json` slot's candidate pool; it **does not change the current source**. To actually use those nodes, select a source explicitly.
-- **`naive` needs a companion library**: when the kernel is unpacked from the official archive, `libcronet.dll` is installed alongside it. If an older version of this tool failed on naive, reinstall the kernel once.
+- **`naive` needs a companion library**: on Windows and Linux the kernel installs one alongside itself (`libcronet.dll` / `libcronet.so`) when unpacked from the official archive. If an older version of this tool failed on naive, reinstall the kernel once. **On macOS `naive` is unavailable** — the official darwin archive ships no cronet companion (neither the x64 nor the arm64 one). That is a limitation of the kernel build, not something this tool left unadapted.
 
 ## 3. Sources and outbound selection: three slots, kept independent
 
@@ -120,7 +120,7 @@ Installation **needs no administrator rights** and raises no UAC prompt.
 ### Windows: portable zip / single-file build
 
 - **zip**: unpack anywhere (avoid special characters in the path) and run `agent-channel.exe`. The kernel is already bundled, so it works offline.
-- **single file** (~10 MB): **no kernel included**; the first run downloads the official archive (~33 MB, ~91 MB unpacked). The UI may look unresponsive while that happens; just let it finish.
+- **single file** (~10 MB): **no kernel included**; the first run downloads the official archive (~33 MB, ~91 MB unpacked). The UI may look unresponsive while that happens; just let it finish. **This form is not on the Releases page** — a single file of the same name differs per platform, so Releases only carries the per-platform packages; build one yourself with `--no-core` (see §10).
 
 ### macOS / Linux
 
@@ -132,6 +132,8 @@ Two paths — **A is recommended** (no Python-version or PATH pitfalls):
 - **Universal tar.gz (Linux / macOS)**: unpack it and run `./install.sh` — installs to `~/.local/opt/agent-channel`, symlinks the command into `~/.local/bin`, **no root needed**; `./install.sh --uninstall` removes it (your `~/.agent_channel` data is kept)
 - **macOS `.dmg` (one for x64, one for arm64)**: open it and drag `agent-channel.app` into Applications
 - All three ship the official prebuilt sing-box kernel: ready to use, no system Python required
+
+> **glibc requirement on Linux**: both the `.deb` and the tar.gz need **glibc ≥ 2.31** (Ubuntu 20.04+, Debian 11+, RHEL 9+). The bundled interpreter and kernel are built in a Debian 11 environment, so older distributions fail at startup with `GLIBC_2.xx not found`; the `.deb` declares the same floor as `libc6 (>= 2.31)`.
 
 > **First launch on macOS**: the bundle is ad-hoc signed and not notarized by Apple, so a copy
 > downloaded through a browser will be blocked by Gatekeeper the first time ("unidentified
