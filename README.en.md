@@ -135,6 +135,8 @@ Two paths — **A is recommended** (no Python-version or PATH pitfalls):
 
 > **glibc requirement on Linux**: both the `.deb` and the tar.gz need **glibc ≥ 2.31** (Ubuntu 20.04+, Debian 11+, RHEL 9+). The bundled interpreter and kernel are built in a Debian 11 environment, so older distributions fail at startup with `GLIBC_2.xx not found`; the `.deb` declares the same floor as `libc6 (>= 2.31)`.
 
+> **macOS system requirement**: the bundle declares `LSMinimumSystemVersion` **11.0** (this release was tested on 12.7.6; 11 was not tested); the `naive` outbound additionally needs **macOS 12 or later** — that is cronet's official floor, and below 12 only that one protocol is unavailable.
+
 > **First launch on macOS**: the bundle is ad-hoc signed and not notarized by Apple, so a copy
 > downloaded through a browser will be blocked by Gatekeeper the first time ("unidentified
 > developer" or "damaged"). Either path works: the **tar.gz** route strips the quarantine flag

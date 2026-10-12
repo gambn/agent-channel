@@ -137,6 +137,8 @@ export HTTPS_PROXY=http://127.0.0.1:20849
 
 > **Linux 的 glibc 要求**：`.deb` 与 tar.gz 都要求 **glibc ≥ 2.31**（Ubuntu 20.04+ / Debian 11+、RHEL 9+）。随包的解释器与内核都在 Debian 11 环境里构建，更老的发行版会在启动时报 `GLIBC_2.xx not found`；`.deb` 里也按这个下限声明了 `libc6 (>= 2.31)`。
 
+> **macOS 的系统要求**：包内 `LSMinimumSystemVersion` 声明的是 **11.0**（本版实测环境为 12.7.6，未在 11 上测过）；`naive` 出站另需 **macOS 12 及以上**——那是 cronet 的官方下限，12 以下只有这一个协议用不了。
+
 > **macOS 首次打开的提示**：包是临时（ad-hoc）签名、未做 Apple 公证，所以从浏览器下载后
 > 第一次打开会被 Gatekeeper 拦下，提示"无法验证开发者"或"已损坏"。两条路都可以：
 > **tar.gz 那条**由 `install.sh` 自动摘掉 quarantine 标记，解包安装后可直接打开；
