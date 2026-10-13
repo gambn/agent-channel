@@ -164,6 +164,9 @@ button {
 	cursor: pointer;
 	font-size: 13px;
 	transition: all 0.15s ease-in-out;
+	/* 按钮文字永远一行：弹性行里宁可让输入框缩，也不把按钮挤成两行 */
+	white-space: nowrap;
+	flex-shrink: 0;
 }
 button:hover {
 	background: var(--green-hover);

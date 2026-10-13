@@ -306,8 +306,13 @@
         <div class="card-title">工具箱与内核管理</div>
         <div class="form-group">
           <label>RFC 4122 v4 UUID 生成器 (供节点配置与链路调试)</label>
-          <div style="display: flex; gap: 8px">
-            <input type="text" id="input-uuid" readonly />
+          <div style="display: flex; gap: 8px; align-items: center">
+            <input
+              type="text"
+              id="input-uuid"
+              readonly
+              style="flex: 1; min-width: 0"
+            />
             <button class="btn-secondary" onclick="handleGenUUID()">
               生成并复制
             </button>
