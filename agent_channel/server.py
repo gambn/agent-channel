@@ -180,6 +180,8 @@ _STATIC_ROUTES: dict[str, str] = {
     "/style.css": "style.css",
     "/app.js": "app.js",
     "/logo.svg": "logo.svg",
+    "/favicon.svg": "favicon.svg",
+    "/favicon.ico": "favicon.ico",
 }
 
 _CONTENT_TYPES: dict[str, str] = {
@@ -187,6 +189,7 @@ _CONTENT_TYPES: dict[str, str] = {
     ".css": "text/css; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
     ".svg": "image/svg+xml",
+    ".ico": "image/vnd.microsoft.icon",
 }
 
 

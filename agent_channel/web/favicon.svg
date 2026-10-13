@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="agent-channel">
+  <rect width="256" height="256" rx="56" fill="#ec9a13"/>
+  <rect x="87" y="55" width="24" height="90" fill="#141414"/>
+  <polygon points="70,145 128,145 99,200" fill="#141414"/>
+  <polygon points="128,110 186,110 157,55" fill="#141414"/>
+  <rect x="145" y="110" width="24" height="90" fill="#141414"/>
+</svg>

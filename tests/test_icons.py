@@ -21,6 +21,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "packaging" / "assets"
+WEB = ROOT / "agent_channel" / "web"
 
 PNG_ASSETS = ("icon.png", "icon-512.png", "icon-1024.png", "tray.png")
 ICO_ASSETS = ("icon.ico", "tray.ico")
@@ -132,10 +133,21 @@ def test_icon_assets_match_the_script_that_generates_them():
                     f"{name} 的 {size[0]}x{size[1]} 档像素与脚本产出不一致"
                 )
 
-        committed_svg = (ROOT / "agent_channel" / "web" / "logo.svg").read_bytes()
-        assert committed_svg == (fresh_web / "logo.svg").read_bytes(), (
-            "logo.svg 与 make_icon.py 产出的矢量标不一致"
+        committed_favicon = _ico_frames(WEB / "favicon.ico")
+        rebuilt_favicon = _ico_frames(fresh_web / "favicon.ico")
+        assert sorted(committed_favicon) == sorted(rebuilt_favicon), (
+            "favicon.ico 的尺寸档位与脚本产出不一致"
         )
+        for size, pixels in committed_favicon.items():
+            assert pixels == rebuilt_favicon[size], (
+                f"favicon.ico 的 {size[0]}x{size[1]} 档像素与脚本产出不一致"
+            )
+
+        # 面板的两份矢量标（浏览器标签页的 favicon 与标题里的品牌标）都由脚本产出
+        for name in ("logo.svg", "favicon.svg"):
+            assert (WEB / name).read_bytes() == (fresh_web / name).read_bytes(), (
+                f"{name} 与 make_icon.py 产出的矢量标不一致"
+            )
 
 
 def test_icon_geometry_follows_each_platform_convention():

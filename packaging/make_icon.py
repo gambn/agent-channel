@@ -28,6 +28,8 @@ ARROW_INK = (20, 20, 20, 255)
 
 # 图标各档尺寸：Windows 在不同场景取不同尺寸（托盘 16 / 任务栏 32 / 资源管理器 48、256）
 ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
+# 浏览器标签页用的位图兜底尺寸（老浏览器不认 SVG favicon，只认 .ico）
+FAVICON_SIZES = (16, 32, 48)
 
 SS = 4  # 超采样倍数
 
@@ -311,10 +313,11 @@ def load_source(source: Path) -> Image.Image:
     return Image.open(source).convert("RGBA")
 
 
-def write_logo_svg(path: Path) -> None:
-    """导出正式品牌标的矢量版（橙底 + 双向箭头），供面板标题使用。
+def write_logo_svg(path: Path, radius: int = 0) -> None:
+    """导出正式品牌标的矢量版（橙底 + 双向箭头），供面板标题与 favicon 使用。
 
-    几何取自 double_arrow 的常量，与位图永远一致。
+    几何取自 double_arrow 的常量，与位图永远一致。`radius` 是 256 基准的圆角：
+    0 是满幅方角（面板标题里的品牌标），给 favicon 时传圆角，标签页上更柔和。
     """
     top, bottom = ARROW_TOP, ARROW_BOTTOM
     head_h = ARROW_HEAD_H
@@ -322,11 +325,12 @@ def write_logo_svg(path: Path) -> None:
     lx, rx = ARROW_LX, ARROW_RX
     bg = "#" + "".join(f"{c:02x}" for c in ARROW_BG)
     ink = "#" + "".join(f"{c:02x}" for c in ARROW_INK[:3])
+    rounded = f' rx="{radius}"' if radius else ""
 
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" '
         'width="256" height="256" role="img" aria-label="agent-channel">\n'
-        f'  <rect width="256" height="256" fill="{bg}"/>\n'
+        f'  <rect width="256" height="256"{rounded} fill="{bg}"/>\n'
         f'  <rect x="{lx - shaft_hw}" y="{top}" width="{shaft_hw * 2}" '
         f'height="{bottom - head_h - top}" fill="{ink}"/>\n'
         f'  <polygon points="{lx - head_hw},{bottom - head_h} '
@@ -492,7 +496,17 @@ def main() -> int:
         if args.variant == "double_arrow":
             # 面板标题用的品牌标矢量版，与正式图标同源
             write_logo_svg(WEB / "logo.svg")
-            print(f"已生成矢量品牌标: {WEB / 'logo.svg'}")
+            # 浏览器标签页的 favicon：矢量版（带圆角）+ 位图兜底（老浏览器只认 .ico）。
+            # 没有它时，浏览器会在标签页上填自己的默认图标（那个"地球"就是浏览器的默认图）。
+            write_logo_svg(WEB / "favicon.svg", radius=RADIUS)
+            write_ico_frames(
+                [_render_for(args.variant, side, "linux") for side in FAVICON_SIZES],
+                WEB / "favicon.ico",
+            )
+            print(
+                f"已生成品牌标与 favicon: {WEB / 'logo.svg'} / "
+                f"{WEB / 'favicon.svg'} / {WEB / 'favicon.ico'}"
+            )
     print(f"已生成: {ASSETS / 'icon.png'} / {ASSETS / 'icon.ico'} ({origin})")
     if not args.source:
         print(

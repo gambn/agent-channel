@@ -117,11 +117,13 @@ def test_server_endpoints():
     assert 'href="style.css"' in html
     assert 'src="app.js"' in html
 
-    # 2. 静态资源可访问且 MIME 正确
+    # 2. 静态资源可访问且 MIME 正确（favicon 两档：SVG 给新浏览器、ICO 给老浏览器）
     for path, expect in (
         ("/style.css", "text/css"),
         ("/app.js", "javascript"),
         ("/logo.svg", "svg"),
+        ("/favicon.svg", "svg"),
+        ("/favicon.ico", "icon"),
     ):
         status, body, ctype = _get(path, base)
         assert status == 200
