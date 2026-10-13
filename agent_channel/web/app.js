@@ -24,23 +24,28 @@ function postJson(path, payload) {
 
 // 退出整套程序：服务端先回响应，再停通道、还原系统代理、关面板。
 // 确认一步是有意的——这一下会把正在跑的通道也停掉。
+// 退出后不摆任何“正在退出/已退出”的落地页：能关标签页就关，关不掉就抹成空白页。
 async function handleQuit() {
 	if (!confirm("退出后通道会停止、系统代理会还原。确定退出吗？")) {
 		return;
 	}
 	const btn = document.getElementById("btn-quit");
 	btn.disabled = true;
-	btn.textContent = "正在退出…";
 	try {
 		const res = await postJson("/api/quit", {});
-		const data = await res.json();
-		document.body.innerHTML =
-			'<div style="padding:40px;font-family:system-ui;font-size:14px">' +
-			(data.message || "已退出") +
-			"<br><br>本页可以关掉了。</div>";
+		if (!res.ok) {
+			throw new Error("HTTP " + res.status);
+		}
+		window.close();
+		// 浏览器通常只允许脚本关自己打开的标签；被拒时直接换到空白页，
+		// 两种情况下都不会给用户留一个描述退出过程的页面。
+		setTimeout(() => {
+			if (!window.closed) {
+				location.replace("about:blank");
+			}
+		}, 150);
 	} catch (err) {
 		btn.disabled = false;
-		btn.textContent = "退出程序";
 		alert("退出请求失败：" + err);
 	}
 }
