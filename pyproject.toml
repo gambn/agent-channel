@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-channel"
-version = "0.1.1"
+version = "0.1.2"
 description = "agent-channel通道代理: 轻量级 AI 通道代理模块"
 readme = "README.md"
 license = { text = "MIT" }
