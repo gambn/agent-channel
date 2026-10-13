@@ -139,7 +139,7 @@ def _open_panel_window(
     return 0
 
 
-QUIT_HINT = "退出：面板底部的「退出程序」按钮，或按 Ctrl-C（关掉浏览器标签不会退出进程）"
+QUIT_HINT = "退出：面板右上角的「退出程序」按钮，或按 Ctrl-C（关掉浏览器标签不会退出进程）"
 
 
 def print_quit_hint() -> None:

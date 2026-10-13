@@ -1142,7 +1142,7 @@ def report_window_toolkit(tree: Path) -> None:
     else:
         print(
             "[build] 图形界面组件未随包：Linux 产物按设计为 CLI + 浏览器面板，"
-            "面板底部有「退出程序」按钮（见 README 的平台差异说明）"
+            "面板右上角有「退出程序」按钮（见 README 的平台差异说明）"
         )
 
 

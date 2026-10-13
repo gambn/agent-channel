@@ -54,6 +54,12 @@ body {
 	font-weight: 700;
 	color: var(--green-deep);
 }
+/* 状态徽标与退出按钮并作右侧一列：退出跟着状态走，不为它单占一栏 */
+.header-actions {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
 /* 标题与开关行里的品牌标记，源文件由 make_icon.py --tray 生成 */
 .brand-logo {
 	width: 26px;

@@ -8,12 +8,17 @@
   </head>
   <body>
     <div class="container">
-      <!-- 顶部标题 -->
+      <!-- 顶部标题：状态与退出挤在同一行，不为它单占一栏 -->
       <div class="header">
         <h1>
           <img class="brand-logo" src="logo.svg" alt="" />agent-channel通道代理
         </h1>
-        <span id="global-badge" class="badge badge-stopped">已停止</span>
+        <div class="header-actions">
+          <span id="global-badge" class="badge badge-stopped">已停止</span>
+          <button id="btn-quit" class="btn-secondary" onclick="handleQuit()">
+            退出程序
+          </button>
+        </div>
       </div>
 
       <!-- 状态看板卡片 -->
@@ -361,27 +366,6 @@
         </div>
       </div>
     </div>
-
-    <div
-      class="card"
-      style="
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-      "
-    >
-      <div>
-        <div style="font-weight: 600; font-size: 13px">退出 agent-channel</div>
-        <div style="font-size: 12px; color: var(--text-muted); margin-top: 3px">
-          停止通道、还原系统代理并关闭面板（macOS 上也可以直接关掉那个窗口）
-        </div>
-      </div>
-      <button id="btn-quit" class="btn-secondary" onclick="handleQuit()">
-        退出程序
-      </button>
-    </div>
-
     <script src="app.js"></script>
   </body>
 </html>

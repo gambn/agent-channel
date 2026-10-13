@@ -197,7 +197,7 @@ When it is up, the status card reads "running" and shows the active outbound.
 
 While running, an icon sits in the system tray. **Right-click** for: **Open panel** / **Start channel** / **Stop channel** / **Quit** (quitting restores the system proxy). **Double-click** the icon to open the panel.
 
-Each platform uses the affordance that fits it: **Windows** uses the system tray; **macOS** gets a native window (the red close button stops the channel, restores the system proxy and exits; the in-window "退出" button does the same); **Linux** is CLI + browser panel — there is no native window, so quit with the **Quit button at the bottom of the panel** or Ctrl-C, and note that **closing the browser tab does not stop the process**.
+Each platform uses the affordance that fits it: **Windows** uses the system tray; **macOS** gets a native window (the red close button stops the channel, restores the system proxy and exits; the in-window "退出" button does the same); **Linux** is CLI + browser panel — there is no native window, so quit with the **Quit button at the top right of the panel** or Ctrl-C, and note that **closing the browser tab does not stop the process**.
 
 ## 8. Command line
 
