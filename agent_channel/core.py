@@ -14,7 +14,7 @@ from .binary import ensure_local_core, get_local_binary_path
 from .parsers import extract_nodes_from_subscription, parse_single_node
 from .patcher import patch_environment, unpatch_environment
 from .pinger import UDP_ONLY_TYPES, ping_node, rank_nodes
-from .probe import test_single_endpoint
+from .probe import geolocate_via_proxy, test_single_endpoint
 from .runner import SingboxRunner, build_minimal_config, heal_stale_kernel
 from .sysproxy import (
     get_system_proxy_status,
@@ -82,10 +82,16 @@ def _verify_proxy_forwarding(proxy_url: str, timeout: float = 12.0) -> tuple[boo
     三个目标**并发**探测、任一应答即判可用，返回 `(是否可用, 说明)`：
 
     - 可用 → 说明是哪个目标答的（如 ``youtube``）；
-    - 全不可达 → 说明里逐个列出目标与错误（如 ``3 个探针目标全部不可达
-      （google: <错误>；cloudflare: <错误>；youtube: <错误>）``）。这句陈述的是
-      **探针观测**，不替调用方断言"节点死了"——实不实用于调用方结合上下文判断
-      （启动自检仍会拒绝，但报错里带着原因）。
+    - 三目标全挂 → 再用落地探测（城市+天气那套）做**最后兜底**：它答了就判可用，
+      说明写明是兜底应的（如 ``落地探测兜底应答（首尔，South Korea；前三目标仍不可达）``）；
+    - 兜底也没答 → 说明里逐个列出目标与错误（如 ``3 个探针目标全部不可达
+      （google: <错误>；cloudflare: <错误>；youtube: <错误>）；落地探测失败: <错误>``）。
+      这句陈述的是**探针观测**，不替调用方断言"节点死了"——实不实用于调用方结合上下文
+      判断（启动自检仍会拒绝，但报错里带着原因）。
+
+    探测的可靠性前提——**必走给定代理、不被 no_proxy 静默绕过**——由 `probe.py` 导入期
+    对 `urllib.request.proxy_bypass` 的进程级禁用保证；否则带 `NO_PROXY=*` 的宿主机上
+    会给死代理报出"可达"（假阳），这四个信号会集体失效。
 
     为什么并发而非顺序：失败路径的耗时不能因多探针翻倍（顺序最坏 3×12s，
     这里最坏仍约等于单目标的 12s，且任一目标先答就立刻收工）。任何 HTTP 状态码
@@ -128,7 +134,19 @@ def _verify_proxy_forwarding(proxy_url: str, timeout: float = 12.0) -> tuple[boo
         f"{name}: {result.get('error') or 'HTTP ' + str(result.get('status'))}"
         for name, result in results.items()
     )
-    return False, f"{len(results)} 个探针目标全部不可达（{detail}）"
+
+    # ---- 三目标全挂时的最后兜底：落地探测（城市+天气）当第四个外部信号 ----
+    # 它走的也是同一个出口：能答就说明链路其实通（那三个目标属特异性不可达），不判
+    # 节点不可用；答不上来就把它的观测并进下面的说明。
+    geo = geolocate_via_proxy(proxy_url, timeout=timeout)
+    if not geo.get("error"):
+        place = "，".join(
+            part for part in (geo.get("city"), geo.get("country")) if part
+        ) or str(geo.get("ip") or "")
+        return True, f"落地探测兜底应答（{place}；前三目标仍不可达）"
+    return False, (
+        f"{len(results)} 个探针目标全部不可达（{detail}）；{geo.get('error')}"
+    )
 
 
 # 订阅地址只接受 http/https，避免 file:// 等方案被用来读取本地文件

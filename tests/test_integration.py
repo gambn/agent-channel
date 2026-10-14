@@ -667,11 +667,12 @@ def test_benchmark_nodes_accepts_node_list():
 
 
 def test_forwarding_probe_uses_multiple_targets_and_reports_observations():
-    """回归：转发验证不再只用一个 Google 探针——任一目标可达即判可用，全灭时带出观测。
+    """回归：转发验证不只用一个 Google 探针——任一目标可达即判可用，全灭时带出观测。
 
     起因（2026-10-13）：某出口把 google 探针挡住、youtube 照跑，单探针却把 7 个节点
-    全判"无法转发"（0/7 全灭）。判据必须是"任一目标应答"；全灭时的报错必须写明各目标
-    观测到什么，而不是替调用方断言"节点不可用"。
+    全判"无法转发"（0/7 全灭）。判据必须是"任一目标应答"；三目标全挂时先用落地探测
+    （城市+天气那套）做**最后兜底**；仍全灭时的报错必须写明各目标观测到什么，
+    而不是替调用方断言"节点不可用"。
     """
     from agent_channel import core
 
@@ -690,12 +691,12 @@ def test_forwarding_probe_uses_multiple_targets_and_reports_observations():
     assert ok is True, "youtube 可达却判失败 = 单 Google 探针的老 bug 回来了"
     assert note == "youtube"
 
-    probed.clear()
-
     def all_unreachable(url, proxy_url=None, timeout=None):
         probed.append(url)
         return {"reachable": False, "error": f"不可达（{url}）", "via": "channel"}
 
+    # 三目标全挂 + 落地兜底也答不上来（代理是死的，ipwho.is 走它必然 Connection refused）
+    probed.clear()
     with patch.object(core, "test_single_endpoint", all_unreachable):
         ok, note = core._verify_proxy_forwarding("http://127.0.0.1:1", timeout=0.5)
     assert ok is False
@@ -703,7 +704,20 @@ def test_forwarding_probe_uses_multiple_targets_and_reports_observations():
     for name, _url in core._FORWARDING_PROBES:
         assert name in note, f"报错里缺目标 {name} 的观测，定位就没了"
     assert "全部不可达" in note
+    assert "落地探测失败" in note, f"兜底跑过、其观测要写进说明：{note}"
     assert "节点不可用" not in note, "观测陈述不许替调用方断言节点死了"
+
+    # 三目标全挂、但落地探测应答 → 判可用（城市+天气是第四个独立信号）
+    probed.clear()
+    with patch.object(core, "test_single_endpoint", all_unreachable), patch.object(
+        core,
+        "geolocate_via_proxy",
+        lambda *a, **k: {"city": "首尔", "country": "South Korea", "ip": "1.2.3.4"},
+    ):
+        ok, note = core._verify_proxy_forwarding("http://127.0.0.1:1", timeout=0.5)
+    assert ok is True, "三目标全挂但落地探测应答时必须判可用（最后兜底）"
+    assert "首尔" in note and "前三目标仍不可达" in note, note
+    assert "节点不可用" not in note, note
 
 
 def test_benchmark_nodes_falls_through_when_node_uri_invalid():

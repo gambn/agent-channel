@@ -73,6 +73,29 @@ def test_probe_with_proxy_marks_via_channel():
     assert result.get("via") == "channel", result
 
 
+def test_probe_never_lets_no_proxy_bypass_the_channel():
+    """`no_proxy`/`NO_PROXY` 不得让探测绕过给定代理静默直连（否则是假阳）。
+
+    故障注入：宿主环境带 `NO_PROXY=*`，代理指向死端口。urllib 的
+    `ProxyHandler.proxy_open` 里有一步 `proxy_bypass(host)`，命中就**静默直连**——
+    直连 example.com 一通，探测就报 `reachable=True`，于是"通道死了却报可达"，
+    转发验证的四个信号（google/cloudflare/youtube + 落地兜底）会集体失效。
+    回归背景（2026-10-13）：老大质疑落地兜底会被这种环境骗过，实测属实
+    （`NO_PROXY=*` 甚至 `NO_PROXY=example.com` 下，死代理探测都报成功），
+    故 `probe.py` 导入期把 `proxy_bypass` 恒置为 False。
+
+    代理指向 127.0.0.1:1（必然拒绝），本测试不需要任何外部网络。
+    """
+    with patch.dict(os.environ, {"NO_PROXY": "*", "no_proxy": "*"}):
+        result = test_single_endpoint(
+            "https://example.com/", "http://127.0.0.1:1", timeout=3.0
+        )
+    assert result.get("reachable") is not True, (
+        f"no_proxy 把探测绕过了给定代理（假阳，通道死了却报可达）：{result}"
+    )
+    assert result.get("via") == "channel", result
+
+
 def test_probe_error_keeps_the_whole_message():
     """探测失败要把原始错误整句带出来：截断会丢掉最该看的状态码。
 

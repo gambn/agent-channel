@@ -10,6 +10,18 @@ from typing import Any
 
 from .utils import MAX_PROBE_BYTES, read_limited
 
+# 探测必须**真**走给定的代理，所以在导入期把 urllib 的"静默绕过"永久关掉。
+# `ProxyHandler.proxy_open` 里有一步 `if req.host and proxy_bypass(host): return None`——
+# 命中宿主机的 `no_proxy`/`NO_PROXY`（Unix）或注册表 `ProxyOverride`（Windows）就直接直连。
+# 实测（2026-10-13）：`NO_PROXY=*`，甚至列表里只含探针目标域名时，给一个**死代理**的
+# 探测照样报 `reachable=True`；对照（未设 no_proxy）则是 Connection refused。后果是
+# 四个探测（google/cloudflare/youtube + 落地兜底）集体假阳："经通道可达"失去意义，
+# 通道死了却报可达——比"单探针误判节点不可用"更危险。
+# 本项目所有 opener 都显式指定代理或显式直连（`ProxyHandler({})`），没有任何一处依赖
+# no_proxy 语义，故进程级禁用安全：环境从此恒等于"未设 no_proxy"的默认态。
+# 放在导入期而非调用期：四个探测并发时各自打补丁会互相提前还原，竞态会让窗口重新漏开。
+urllib.request.proxy_bypass = lambda _host: False
+
 
 def test_single_endpoint(
     url: str, proxy_url: str | None = None, timeout: float = 3.5
