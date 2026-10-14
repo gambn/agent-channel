@@ -155,6 +155,27 @@ def test_check_for_update_respects_dismissed_version_only_for_that_version():
     assert got is not None and got["version"] == "v0.1.5"
 
 
+def test_first_check_in_a_fresh_process_actually_fetches_even_on_small_uptime():
+    """回归：缓存初值不能长得像"刚查过"。
+
+    `time.monotonic()` 是开机以来的秒数。初值写成 0.0 时，开机不满 TTL（24 小时）的
+    机器上"距上次检查"会小于 TTL，首查被判为 fresh 而跳过；跳过又不更新缓存，于是
+    只要开机不满一天就永远不查、提示永不出现。实测踩过一次（演示实例上横条不来）。
+    """
+    updates._cache.update(
+        {"at": None, "latest": None, "ttl": updates.CACHE_TTL_SECONDS}
+    )
+    calls: list[int] = []
+
+    def counting(**kwargs):
+        calls.append(1)
+        return {"version": "v9.9.9", "url": ""}
+
+    got = updates.check_for_update("0.1.3", now=600.0, fetch=counting)  # 开机 10 分钟
+    assert len(calls) == 1, "首次检查必须真的去查，不能被「刚查过」的初值挡住"
+    assert got is not None and got["version"] == "v9.9.9"
+
+
 def test_check_for_update_caches_and_retries_sooner_after_a_failure():
     calls: list[int] = []
 

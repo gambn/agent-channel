@@ -33,7 +33,10 @@ FAILURE_RETRY_SECONDS = 10 * 60
 _FETCH_TIMEOUT = 5.0
 
 _lock = threading.Lock()
-_cache: dict[str, Any] = {"at": 0.0, "latest": None, "ttl": CACHE_TTL_SECONDS}
+# `at = None` 表示"本进程还没查过"。**不能写 0.0**：`time.monotonic()` 是开机以来的
+# 秒数，开机不满 24 小时的机器上"距上次检查"会算成小于 TTL，于是首查被跳过；而跳过
+# 时又不会更新缓存，结果只要开机不满一天就永远不查、提示永不出现（实测踩过）。
+_cache: dict[str, Any] = {"at": None, "latest": None, "ttl": CACHE_TTL_SECONDS}
 
 
 def parse_version(text: object) -> tuple[int, ...] | None:
@@ -192,7 +195,8 @@ def check_for_update(
     do_fetch = fetch or fetch_latest
 
     with _lock:
-        fresh = (moment - float(_cache["at"])) < float(_cache["ttl"])
+        at = _cache["at"]
+        fresh = at is not None and (moment - float(at)) < float(_cache["ttl"])
         latest: dict[str, Any] | None = _cache["latest"] if fresh else None
     # 只看"缓存还新不新"，不看缓存里是不是 None：缓存下来的失败也算一次结果，
     # 否则失败静默期形同虚设（每次调用都会立刻再打一次网络）。
