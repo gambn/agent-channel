@@ -6,6 +6,7 @@
 """
 
 import time
+from unittest.mock import patch
 
 from agent_channel import updates
 
@@ -55,7 +56,73 @@ def test_check_for_update_only_reports_a_strictly_newer_version():
         "version": "v0.1.4",
         "url": "https://example.invalid/release",
         "current": "0.1.3",
+        # 替身没给资产清单：认不出来就退到发布页，而不是猜一个包
+        "asset": None,
     }
+
+
+# 产物命名照仓库实际（见 BUILD-INFO.txt）：注意 deb 的名字里没有 `linux-x64`，
+# Windows 安装包也没有 `windows-x64`，所以匹配规则必须分开写。
+_RELEASE_ASSETS = [
+    {"name": "agent-channel-9.9.9-linux-x64.tar.gz", "url": "u-linux-tar"},
+    {"name": "agent-channel_9.9.9_amd64.deb", "url": "u-linux-deb"},
+    {"name": "agent-channel-9.9.9-darwin-x64.dmg", "url": "u-mac-x64-dmg"},
+    {"name": "agent-channel-9.9.9-darwin-x64.tar.gz", "url": "u-mac-x64-tar"},
+    {"name": "agent-channel-9.9.9-darwin-arm64.dmg", "url": "u-mac-arm-dmg"},
+    {"name": "agent-channel-9.9.9-darwin-arm64.tar.gz", "url": "u-mac-arm-tar"},
+    {"name": "agent-channel-9.9.9-setup.exe", "url": "u-win-exe"},
+    {"name": "agent-channel-9.9.9-windows-x64.zip", "url": "u-win-zip"},
+    {"name": "agent_channel-9.9.9-py3-none-any.whl", "url": "u-whl"},
+]
+
+
+def _picked(assets, os_name, arch, system_install=False) -> str:
+    """挑出来的资产直链；挑不出来直接判失败（用例要的是"必须挑中"）。"""
+    got = updates.pick_asset(
+        assets, os_name, arch, system_install=system_install
+    )
+    assert got is not None, f"{os_name}/{arch} 没挑出对应资产"
+    return str(got["url"])
+
+
+def test_pick_asset_picks_the_installer_for_each_platform():
+    assert _picked(_RELEASE_ASSETS, "darwin", "amd64") == "u-mac-x64-dmg"
+    assert _picked(_RELEASE_ASSETS, "darwin", "arm64") == "u-mac-arm-dmg"
+    assert _picked(_RELEASE_ASSETS, "windows", "amd64") == "u-win-exe"
+    # Linux 按当前这份的装法给：用户目录（install.sh 到 ~/.local/opt）给 tar.gz，
+    # 系统目录（deb）给 deb —— 免得让用户去拿一个与自己现在这份不同装法的包。
+    assert _picked(_RELEASE_ASSETS, "linux", "amd64") == "u-linux-tar"
+    assert (
+        _picked(_RELEASE_ASSETS, "linux", "amd64", system_install=True) == "u-linux-deb"
+    )
+
+
+def test_pick_asset_is_silent_when_nothing_matches():
+    """认不出平台或没有对应资产时返回 None：调用方退到发布页，绝不猜一个包给用户。"""
+    assert updates.pick_asset(_RELEASE_ASSETS, "", "amd64") is None
+    assert updates.pick_asset(_RELEASE_ASSETS, "freebsd", "amd64") is None
+    assert updates.pick_asset([], "linux", "amd64") is None
+    assert updates.pick_asset(None, "linux", "amd64") is None
+    # 只有 wheel 时也不该把它当成安装包推给用户
+    only_wheel = [{"name": "agent_channel-9.9.9-py3-none-any.whl", "url": "u"}]
+    assert updates.pick_asset(only_wheel, "linux", "amd64") is None
+
+
+def test_check_for_update_carries_the_platform_asset_when_present():
+    """平台上下文钉住再测：测试环境把 HOME 指到了临时目录，不钉住就测不出真实取舍。"""
+    with patch.object(updates, "_platform_context", lambda: ("linux", "amd64", False)):
+        got = updates.check_for_update(
+            "0.1.3",
+            force=True,
+            fetch=lambda **kw: {
+                "version": "v9.9.9",
+                "url": "https://example.invalid/release",
+                "assets": _RELEASE_ASSETS,
+            },
+        )
+    assert got and got["asset"], "有对应资产时必须把直链带上"
+    assert got["asset"]["url"] == "u-linux-tar"
+    assert got["asset"]["name"].endswith(".tar.gz")
 
 
 def test_check_for_update_is_silent_when_the_check_fails():

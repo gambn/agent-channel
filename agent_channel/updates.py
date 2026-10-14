@@ -98,7 +98,75 @@ def fetch_latest(
     if not tag:
         # 限流时 GitHub 回的也是合法 JSON（`{"message": ...}`），此时没有版本可言
         return None
-    return {"version": tag, "url": str(data.get("html_url") or "")}
+    assets = [
+        {"name": str(a.get("name") or ""), "url": str(a.get("browser_download_url") or "")}
+        for a in (data.get("assets") or [])
+        if isinstance(a, dict)
+    ]
+    return {"version": tag, "url": str(data.get("html_url") or ""), "assets": assets}
+
+
+def _asset_preferences(os_name: str, arch: str, system_install: bool) -> list[str]:
+    """本机该下的资产名的匹配次序（第一个命中的就是它）。
+
+    名字按仓库产物的实际命名来（见 BUILD-INFO.txt）：macOS 是 `-darwin-x64.dmg`、
+    Windows 是 `-setup.exe` 与 `-windows-x64.zip`、Linux 是 `-linux-x64.tar.gz` 与
+    `_amd64.deb`（deb 的命名里没有平台词，所以单列一条）。
+    """
+    arm = arch == "arm64"
+    if os_name == "darwin":
+        tag = "darwin-arm64" if arm else "darwin-x64"
+        # 装过就用 dmg（拖进应用程序更规矩），免安装的 tar.gz 排后面
+        return [f"{tag}.dmg", f"{tag}.tar.gz"]
+    if os_name == "windows":
+        return ["-setup.exe", "windows-x64.zip"]
+    if os_name == "linux":
+        tag = "linux-arm64" if arm else "linux-x64"
+        deb = "_arm64.deb" if arm else "_amd64.deb"
+        # 装在系统目录的（deb）给 deb，装在用户目录的（install.sh 到 ~/.local/opt）给 tar.gz：
+        # 让用户拿到的那个包跟他现在这份是同一种装法，免得要他去卸一个不该卸的东西。
+        return [deb, f"{tag}.tar.gz"] if system_install else [f"{tag}.tar.gz", deb]
+    return []
+
+
+def _platform_context() -> tuple[str, str, bool]:
+    """(系统名, 架构, 是否系统目录安装)；认不出来返回空串组合（于是不给资产直链）。
+
+    认不出来绝不抛：版本提示是附赠信息，不能因为识别平台失败就让面板出错。
+    """
+    try:
+        from .binary import platform_arch, platform_os
+
+        os_name, arch = platform_os(), platform_arch()
+    except Exception:
+        return "", "", False
+    try:
+        import sys
+        from pathlib import Path
+
+        # 打包后的程序看自身可执行文件；从wheel/源码跑就看这个模块所在位置
+        here = Path(sys.executable) if getattr(sys, "frozen", False) else Path(__file__)
+        system_install = not str(here.resolve()).startswith(str(Path.home()))
+    except Exception:
+        system_install = False
+    return os_name, arch, system_install
+
+
+def pick_asset(
+    assets: object, os_name: str, arch: str, *, system_install: bool = False
+) -> dict[str, Any] | None:
+    """从 Release 资产里挑出本机该下的那一个；挑不出来返回 None（调用方退到发布页）。"""
+    if not isinstance(assets, list) or not os_name:
+        return None
+    for want in _asset_preferences(os_name, arch, system_install):
+        for asset in assets:
+            if not isinstance(asset, dict):
+                continue
+            name = str(asset.get("name") or "")
+            url = str(asset.get("url") or "")
+            if want in name and url:
+                return {"name": name, "url": url}
+    return None
 
 
 def check_for_update(
@@ -148,8 +216,16 @@ def check_for_update(
         return None
     if not is_newer(version, current):
         return None
+    os_name, arch, system_install = _platform_context()
     return {
         "version": version,
         "url": str(latest.get("url") or ""),
         "current": current,
+        # 有没有直链都不影响提示：没有就退回发布页，让用户自己挑
+        "asset": pick_asset(
+            latest.get("assets"),
+            os_name,
+            arch,
+            system_install=system_install,
+        ),
     }

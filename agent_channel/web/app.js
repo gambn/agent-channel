@@ -705,8 +705,18 @@ async function checkAppUpdate() {
 		document.getElementById("update-version").innerText = data.update.version;
 		document.getElementById("update-current").innerText =
 			data.update.current || "";
+		// 能认出本机该下哪个包就直链那个包，认不出来就退到发布页让用户自己挑
+		const link = document.getElementById("update-link");
+		const asset = data.update.asset;
+		if (asset && asset.url) {
+			link.href = asset.url;
+			link.innerText = "下载 " + asset.name;
+		} else if (data.update.url) {
+			link.href = data.update.url;
+			link.innerText = "去发布页下载";
+		}
 		if (data.update.url) {
-			document.getElementById("update-link").href = data.update.url;
+			document.getElementById("update-release").href = data.update.url;
 		}
 		document.getElementById("update-hint").hidden = false;
 	} catch (e) {

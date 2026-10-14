@@ -311,6 +311,12 @@ input:checked + .slider:before {
 	font-weight: 600;
 	text-decoration: underline;
 }
+/* 发布页只是兜底入口，视觉上让位给“下载本机该装的那个包” */
+.update-hint a.update-release {
+	color: var(--text-muted);
+	font-weight: 400;
+	font-size: 12px;
+}
 /* 文字型按钮：只用于“跳过此版本”这类低调动作，与主按钮区分开 */
 .btn-link {
 	border: none;
