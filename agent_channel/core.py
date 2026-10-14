@@ -3,7 +3,9 @@ import os
 import signal
 import sys
 import threading
+import time
 from collections.abc import Iterator
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,7 @@ from .binary import ensure_local_core, get_local_binary_path
 from .parsers import extract_nodes_from_subscription, parse_single_node
 from .patcher import patch_environment, unpatch_environment
 from .pinger import UDP_ONLY_TYPES, ping_node, rank_nodes
+from .probe import test_single_endpoint
 from .runner import SingboxRunner, build_minimal_config, heal_stale_kernel
 from .sysproxy import (
     get_system_proxy_status,
@@ -63,27 +66,69 @@ def channel_operation() -> Iterator[None]:
         _CHANNEL_LOCK.release()
 
 
-def _verify_proxy_forwarding(proxy_url: str, timeout: float = 12.0) -> bool:
+# 转发验证的探针目标：**多目标取其一**。只用单个 Google 探针时，"目标不可达"会被
+# 判成"节点不可用"——实测过一次：某出口把 google 探针挡住，youtube 照跑，测速却是 0/7
+# 全灭。三个目标都取小响应体（204 / 追踪文本 / robots.txt），不多花带宽。
+_FORWARDING_PROBES: tuple[tuple[str, str], ...] = (
+    ("google", "https://www.google.com/generate_204"),
+    ("cloudflare", "https://www.cloudflare.com/cdn-cgi/trace"),
+    ("youtube", "https://www.youtube.com/robots.txt"),
+)
+
+
+def _verify_proxy_forwarding(proxy_url: str, timeout: float = 12.0) -> tuple[bool, str]:
     """通过本地代理访问海外探测地址，验证节点是否能真实转发流量。
+
+    三个目标**并发**探测、任一应答即判可用，返回 `(是否可用, 说明)`：
+
+    - 可用 → 说明是哪个目标答的（如 ``youtube``）；
+    - 全不可达 → 说明里逐个列出目标与错误（如 ``3 个探针目标全部不可达
+      （google: <错误>；cloudflare: <错误>；youtube: <错误>）``）。这句陈述的是
+      **探针观测**，不替调用方断言"节点死了"——实不实用于调用方结合上下文判断
+      （启动自检仍会拒绝，但报错里带着原因）。
+
+    为什么并发而非顺序：失败路径的耗时不能因多探针翻倍（顺序最坏 3×12s，
+    这里最坏仍约等于单目标的 12s，且任一目标先答就立刻收工）。任何 HTTP 状态码
+    都算链路可达（复用 ``test_single_endpoint`` 的既有语义：服务端已应答 = 链路通），
+    所以"目标返回 403"不再被记成转发失败。
 
     仅 TCP 握手可达不代表节点可用（例如 Reality 握手失败的节点），
     必须实际请求一次海外站点确认数据能往返。
 
     超时给得宽（12s）：节点域名若同时有 AAAA（IPv6）而该 IPv6 不可达，
     内核会先拨 IPv6 直到超时（实测约 7s）才回落 IPv4，首连合计可达 8s+；
-    给 3~4s 会把这种“能通但首连慢”的节点误判为转发失败。
+    给 3~4s 会把这种"能通但首连慢"的节点误判为转发失败。
     """
-    import urllib.request
+    results: dict[str, dict[str, Any]] = {}
+    deadline = time.monotonic() + timeout + 3.0
+    with ThreadPoolExecutor(max_workers=len(_FORWARDING_PROBES)) as pool:
+        futures = {
+            pool.submit(test_single_endpoint, url, proxy_url, timeout): name
+            for name, url in _FORWARDING_PROBES
+        }
+        pending = set(futures)
+        while pending:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            done, pending = wait(pending, timeout=min(left, 0.1), return_when=FIRST_COMPLETED)
+            for future in done:
+                name = futures[future]
+                try:
+                    result = future.result()
+                except Exception as exc:  # 线程内异常如实记成该目标的观测，不炸整个验证
+                    result = {"reachable": False, "error": str(exc).strip() or repr(exc)}
+                results[name] = result
+                if result.get("reachable"):
+                    return True, name  # 任一目标答了就收工，不等慢的那个
+        for future in pending:  # 预算内没等到的按未应答如实记下
+            results[futures[future]] = {"reachable": False, "error": "预算内未应答"}
 
-    handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
-    opener = urllib.request.build_opener(handler)
-    try:
-        with opener.open(
-            "https://www.google.com/generate_204", timeout=timeout
-        ) as resp:
-            return resp.status in (200, 204)
-    except Exception:
-        return False
+    detail = "；".join(
+        f"{name}: {result.get('error') or 'HTTP ' + str(result.get('status'))}"
+        for name, result in results.items()
+    )
+    return False, f"{len(results)} 个探针目标全部不可达（{detail}）"
 
 
 # 订阅地址只接受 http/https，避免 file:// 等方案被用来读取本地文件
@@ -248,9 +293,16 @@ def _enable_channel(
                 runner.stop()
                 continue
 
-            if not _verify_proxy_forwarding(f"http://127.0.0.1:{probe_port}"):
+            forwarding_ok, probe_note = _verify_proxy_forwarding(
+                f"http://127.0.0.1:{probe_port}"
+            )
+            if not forwarding_ok:
                 runner.stop()
-                last_error = ValueError(f"节点 {candidate.get('tag')} 无法建立有效转发")
+                # 报错里带上探针观测：区分"目标不可达"与"节点不可用"的唯一依据就是它——
+                # 全灭时那句是"3 个探针目标全部不可达（…）"，不是断言节点死了。
+                last_error = ValueError(
+                    f"节点 {candidate.get('tag')} 无法建立有效转发：{probe_note}"
+                )
                 continue
 
             # ---- 第二段：候选已证明可用，现在才拆旧 ----
@@ -580,10 +632,13 @@ def benchmark_nodes(
             "tcp_ms": round(rtt, 1) if rtt is not None else None,
             "tcp_reachable": rtt is not None,
             "forwarding": None,
+            "forwarding_note": "",
         }
         can_forward = rtt is not None or node_type in UDP_ONLY_TYPES
         if forwarding_check and can_forward and bin_path.exists():
-            entry["forwarding"], landing_ip = _check_node_forwarding(node, bin_path)
+            entry["forwarding"], landing_ip, entry["forwarding_note"] = (
+                _check_node_forwarding(node, bin_path)
+            )
             if entry["forwarding"]:
                 entry["landing_ip"] = landing_ip
                 entry["is_relay"] = _is_relay(node, landing_ip)
@@ -649,10 +704,12 @@ def _is_relay(node: dict[str, Any], landing_ip: str | None) -> bool | None:
 
 def _check_node_forwarding(
     node: dict[str, Any], bin_path: Path, timeout: float = 12.0
-) -> tuple[bool, str | None]:
+) -> tuple[bool, str | None, str]:
     """启动临时 sing-box 验证节点能否真实转发流量，并顺带探测真实落地 IP。
 
-    返回 (forwarding, landing_ip)；完成后清理进程与临时配置。
+    返回 (forwarding, landing_ip, 探针说明)；探针说明在转发失败时是
+    `_verify_proxy_forwarding` 给的观测（哪些目标、什么错误），成功时是应答目标的名字。
+    完成后清理进程与临时配置。
     """
     port = get_free_port()
     config = build_minimal_config(inbound_port=port, outbound_node=node)
@@ -661,13 +718,15 @@ def _check_node_forwarding(
     try:
         runner.start(config, tmp_config)
         proxy_url = f"http://127.0.0.1:{port}"
-        forwarding = _verify_proxy_forwarding(proxy_url, timeout=timeout)
+        forwarding, probe_note = _verify_proxy_forwarding(proxy_url, timeout=timeout)
         landing_ip = None
         if forwarding:
             landing_ip = _probe_landing_ip(proxy_url)
-        return forwarding, landing_ip
-    except Exception:
-        return False, None
+        return forwarding, landing_ip, probe_note
+    except Exception as exc:
+        # 内核没起来是节点侧问题（配置解析失败等），如实带出真因，
+        # 不与"探针目标不可达"混为一谈。
+        return False, None, f"临时内核启动失败: {str(exc).strip() or repr(exc)}"
     finally:
         runner.stop()
         with suppress(OSError):

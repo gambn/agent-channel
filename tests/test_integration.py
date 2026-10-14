@@ -119,7 +119,7 @@ def test_fixed_port_switch_verifies_on_shadow_port_first():
             patch.object(core, "get_local_binary_path", lambda: Path(__file__)),
             patch.object(core, "rank_nodes", lambda nodes, timeout=None: list(nodes)),
             patch.object(
-                core, "_verify_proxy_forwarding", lambda _url, timeout=12.0: True
+                core, "_verify_proxy_forwarding", lambda *a, **k: (True, "mock")
             ),
             patch.object(core, "patch_environment"),
             patch.object(core, "set_system_proxy", lambda **_kw: True),
@@ -178,7 +178,7 @@ def test_rebind_failure_reports_the_real_cause():
             patch.object(core, "get_local_binary_path", lambda: Path(__file__)),
             patch.object(core, "rank_nodes", lambda nodes, timeout=None: list(nodes)),
             patch.object(
-                core, "_verify_proxy_forwarding", lambda _url, timeout=12.0: True
+                core, "_verify_proxy_forwarding", lambda *a, **k: (True, "mock")
             ),
             patch.object(core, "patch_environment"),
             patch.object(core, "set_system_proxy", lambda **_kw: True),
@@ -246,7 +246,7 @@ def test_concurrent_enable_is_serialized():
             patch.object(core, "get_local_binary_path", lambda: Path(__file__)),
             patch.object(core, "rank_nodes", lambda nodes, timeout=None: list(nodes)),
             patch.object(
-                core, "_verify_proxy_forwarding", lambda _url, timeout=12.0: True
+                core, "_verify_proxy_forwarding", lambda *a, **k: (True, "mock")
             ),
             patch.object(core, "patch_environment"),
             patch.object(core, "set_system_proxy", lambda **_kw: True),
@@ -370,7 +370,7 @@ def test_real_kernel_switch_rebinds_fixed_port():
         with (
             patch.object(core, "rank_nodes", lambda nodes, timeout=None: list(nodes)),
             patch.object(
-                core, "_verify_proxy_forwarding", lambda _url, timeout=12.0: True
+                core, "_verify_proxy_forwarding", lambda *a, **k: (True, "mock")
             ),
         ):
             core.enable_channel(
@@ -470,7 +470,7 @@ def test_dead_node_keeps_running_channel():
             ),
             patch.object(core, "SingboxRunner", make_runner),
             patch.object(
-                core, "_verify_proxy_forwarding", lambda url, timeout=0: False
+                core, "_verify_proxy_forwarding", lambda *a, **k: (False, "mock")
             ),
         ):
             try:
@@ -527,7 +527,7 @@ def test_midway_error_stops_new_kernel_and_reports_truthfully():
                 core, "get_local_binary_path", lambda: Path(__file__).resolve()
             ),
             patch.object(core, "SingboxRunner", make_runner),
-            patch.object(core, "_verify_proxy_forwarding", lambda url, timeout=0: True),
+            patch.object(core, "_verify_proxy_forwarding", lambda *a, **k: (True, "mock")),
             patch.object(
                 core,
                 "patch_environment",
@@ -624,7 +624,7 @@ def test_system_proxy_failure_is_visible_in_status():
                 core, "get_local_binary_path", lambda: Path(__file__).resolve()
             ),
             patch.object(core, "SingboxRunner", make_runner),
-            patch.object(core, "_verify_proxy_forwarding", lambda url, timeout=0: True),
+            patch.object(core, "_verify_proxy_forwarding", lambda *a, **k: (True, "mock")),
             patch.object(core, "set_system_proxy", lambda **kw: False),
         ):
             status = core.enable_channel(
@@ -664,6 +664,46 @@ def test_benchmark_nodes_accepts_node_list():
         assert "uuid" not in r
         assert "password" not in r
         assert "node" not in r
+
+
+def test_forwarding_probe_uses_multiple_targets_and_reports_observations():
+    """回归：转发验证不再只用一个 Google 探针——任一目标可达即判可用，全灭时带出观测。
+
+    起因（2026-10-13）：某出口把 google 探针挡住、youtube 照跑，单探针却把 7 个节点
+    全判"无法转发"（0/7 全灭）。判据必须是"任一目标应答"；全灭时的报错必须写明各目标
+    观测到什么，而不是替调用方断言"节点不可用"。
+    """
+    from agent_channel import core
+
+    probed: list[str] = []
+
+    def google_blocked(url, proxy_url=None, timeout=None):
+        probed.append(url)
+        if "google" in url:
+            return {"reachable": False, "error": "连接被重置", "via": "channel"}
+        if "youtube" in url:
+            return {"reachable": True, "status": 200, "via": "channel"}
+        return {"reachable": False, "error": "超时", "via": "channel"}
+
+    with patch.object(core, "test_single_endpoint", google_blocked):
+        ok, note = core._verify_proxy_forwarding("http://127.0.0.1:1", timeout=0.5)
+    assert ok is True, "youtube 可达却判失败 = 单 Google 探针的老 bug 回来了"
+    assert note == "youtube"
+
+    probed.clear()
+
+    def all_unreachable(url, proxy_url=None, timeout=None):
+        probed.append(url)
+        return {"reachable": False, "error": f"不可达（{url}）", "via": "channel"}
+
+    with patch.object(core, "test_single_endpoint", all_unreachable):
+        ok, note = core._verify_proxy_forwarding("http://127.0.0.1:1", timeout=0.5)
+    assert ok is False
+    assert len(probed) == len(core._FORWARDING_PROBES), "全灭时三个目标也必须都探过"
+    for name, _url in core._FORWARDING_PROBES:
+        assert name in note, f"报错里缺目标 {name} 的观测，定位就没了"
+    assert "全部不可达" in note
+    assert "节点不可用" not in note, "观测陈述不许替调用方断言节点死了"
 
 
 def test_benchmark_nodes_falls_through_when_node_uri_invalid():
@@ -788,7 +828,7 @@ def test_enable_channel_accepts_node_list():
                 core, "get_local_binary_path", lambda: Path(__file__).resolve()
             ),
             patch.object(core, "SingboxRunner", FakeRunner),
-            patch.object(core, "_verify_proxy_forwarding", lambda url, timeout=0: True),
+            patch.object(core, "_verify_proxy_forwarding", lambda *a, **k: (True, "mock")),
             patch.object(core, "set_system_proxy", lambda **kw: False),
         ):
             status = core.enable_channel(
@@ -847,7 +887,7 @@ def test_enable_channel_accepts_json_single_node():
                 core, "get_local_binary_path", lambda: Path(__file__).resolve()
             ),
             patch.object(core, "SingboxRunner", FakeRunner),
-            patch.object(core, "_verify_proxy_forwarding", lambda url, timeout=0: True),
+            patch.object(core, "_verify_proxy_forwarding", lambda *a, **k: (True, "mock")),
             patch.object(core, "set_system_proxy", lambda **kw: False),
         ):
             status = core.enable_channel(
@@ -898,7 +938,7 @@ def test_benchmark_nodes_reports_landing_ip():
         patch.object(core, "get_local_binary_path", lambda: Path(__file__).resolve()),
         patch.object(core, "ping_node", return_value=50.0),
         patch.object(
-            core, "_check_node_forwarding", return_value=(True, "198.51.100.7")
+            core, "_check_node_forwarding", return_value=(True, "198.51.100.7", "mock")
         ),
         patch.object(core, "_is_relay", return_value=True),
     ):

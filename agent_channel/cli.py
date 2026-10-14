@@ -222,6 +222,10 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
         fwd = {True: "ok", False: "fail", None: "?"}[r["forwarding"]]
         tcp = f"{r['tcp_ms']}ms" if r["tcp_ms"] is not None else "udp"
         print(f"[{i}] {fwd:<4} {tcp:<7} {r['type']:<10} {r['tag']}")
+        # fail 的行跟一句探针观测：否则"fail"会被读成"节点不可用"，
+        # 而实测出现过"只是探针目标被该出口挡住、节点照跑"的情况。
+        if r["forwarding"] is False and r.get("forwarding_note"):
+            print(f"      ↳ {r['forwarding_note']}")
     return EXIT_OK
 
 

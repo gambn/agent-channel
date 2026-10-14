@@ -501,6 +501,13 @@ function renderBenchmarkResults(data, resultEl) {
 		else if (r.forwarding === false)
 			fwd = '<span style="color:#dc2626;">转发失败</span>';
 		else fwd = '<span style="color:var(--text-muted);">未验证</span>';
+		// 失败时把探针观测跟在后面：不然"转发失败"会被读成"节点不可用"，
+		// 而可能只是探针目标被该出口挡住。
+		if (r.forwarding === false && r.forwarding_note)
+			fwd +=
+				'<span style="color:var(--text-muted);font-size:12px;">' +
+				escapeHtml(r.forwarding_note) +
+				"</span>";
 		let landing = "";
 		if (r.landing_ip) {
 			landing =
