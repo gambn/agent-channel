@@ -694,10 +694,43 @@ function weatherDesc(code) {
 	return map[code] || "";
 }
 
+// 应用自身的新版本提示：后台悄悄问一次服务端，有严格更新的版本才显示一条横条。
+// 查不到（被墙 / 超时 / 限流）什么都不显示 —— “没查到”与“已是最新”在界面上一样安静，
+// 因为面板本来就没有“已是最新”这个结论可下。
+async function checkAppUpdate() {
+	try {
+		const res = await fetch("/api/app_update");
+		const data = await res.json();
+		if (!data.update) return;
+		document.getElementById("update-version").innerText = data.update.version;
+		document.getElementById("update-current").innerText =
+			data.update.current || "";
+		if (data.update.url) {
+			document.getElementById("update-link").href = data.update.url;
+		}
+		document.getElementById("update-hint").hidden = false;
+	} catch (e) {
+		/* 这只是提示，不是状态：出错就不显示，不打扰 */
+	}
+}
+
+// 跳过这个版本：记住它，将来有更新的版本仍会提示；记不住也只是下次再提示一次。
+async function dismissUpdate() {
+	document.getElementById("update-hint").hidden = true;
+	try {
+		await postJson("/api/dismiss_update", {
+			version: document.getElementById("update-version").innerText,
+		});
+	} catch (e) {
+		/* 忽略：不影响使用 */
+	}
+}
+
 // 页面初始化
 loadConfig();
 loadCoreInfo();
 handleGenUUID();
 refreshStatus();
 refreshGeolocation();
+checkAppUpdate();
 setInterval(refreshStatus, 3000);

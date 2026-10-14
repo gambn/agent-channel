@@ -38,6 +38,7 @@ from .config import (
     slot_selection,
     updated_selections,
 )
+from .updates import check_for_update
 from .core import (
     ChannelBusyError,
     benchmark_nodes,
@@ -267,6 +268,8 @@ class ChannelRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"local_version": get_local_core_version()})
         elif path == "/api/check_update":
             self._send_json(check_core_update())
+        elif path == "/api/app_update":
+            self._handle_app_update()
         elif path == "/api/outbound_options":
             self._send_json(_outbound_options(query.get("source")))
         elif path == "/api/geolocation":
@@ -390,6 +393,8 @@ class ChannelRequestHandler(http.server.BaseHTTPRequestHandler):
             self._handle_set_outbound(payload)
         elif self.path == "/api/quit":
             self._handle_quit()
+        elif self.path == "/api/dismiss_update":
+            self._handle_dismiss_update(payload)
         else:
             self.send_error(404, "Not Found")
 
@@ -553,6 +558,37 @@ class ChannelRequestHandler(http.server.BaseHTTPRequestHandler):
             shutdown_app()
 
         threading.Thread(target=_quit_soon, daemon=True).start()
+
+    def _handle_app_update(self) -> None:
+        """应用自身有没有新版本：只告知，查不到就什么都不说（`update: null`）。
+
+        通道在跑就借它去查——被墙的网络里那是唯一能通的一条路；没跑就直连，且不走
+        系统代理（它可能指向本工具已停止的端口，见 `binary._open_direct`）。
+        """
+        status = get_channel_status()
+        proxy_url = (
+            status.get("proxy_url") if status.get("status") == "running" else None
+        )
+        cfg = load_config()
+        self._send_json(
+            {
+                "update": check_for_update(
+                    dismissed=str(cfg.get("dismissed_version") or ""),
+                    proxy_url=proxy_url,
+                )
+            }
+        )
+
+    def _handle_dismiss_update(self, payload: dict[str, Any]) -> None:
+        """记住“跳过这个版本”；写不进去也回成功以外的原因（不假装记住）。"""
+        version = str(payload.get("version") or "").strip()
+        if not version:
+            self._send_json({"success": False, "error": "缺少 version"}, status=400)
+            return
+        saved = save_config({"dismissed_version": version})
+        self._send_json(
+            {"success": saved, "error": None if saved else save_error()}
+        )
 
     def _handle_geolocation(self) -> None:
         """探测落地 IP 的地理位置与天气（走当前通道代理，反映节点出口的真实落地）。"""

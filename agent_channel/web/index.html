@@ -23,6 +23,23 @@
         </div>
       </div>
 
+      <!-- 新版本提示：只在真有更新、且用户没跳过这个版本时出现；查不到就一行都不显示 -->
+      <div id="update-hint" class="update-hint" hidden>
+        <span
+          >发现新版本 <b id="update-version"></b>（当前
+          <span id="update-current"></span>）</span
+        >
+        <a id="update-link" href="#" target="_blank" rel="noopener">去哪下</a>
+        <button
+          id="update-dismiss"
+          class="btn-link"
+          type="button"
+          onclick="dismissUpdate()"
+        >
+          跳过此版本
+        </button>
+      </div>
+
       <!-- 状态看板卡片 -->
       <div class="card">
         <div class="card-title">

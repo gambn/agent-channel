@@ -287,3 +287,43 @@ input:checked + .slider {
 input:checked + .slider:before {
 	transform: translateX(20px);
 }
+
+/* 新版本提示：一条安静的横条，不抢状态卡的注意力，也不用它的绿色高亮 */
+.update-hint {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+	margin-bottom: 14px;
+	padding: 8px 12px;
+	border: 1px solid var(--green-light-border);
+	border-radius: 8px;
+	background: var(--green-soft-bg);
+	color: var(--green-tag-text);
+	font-size: 13px;
+}
+/* hidden 属性必须显式压过上面的 display:flex，否则“藏起来”的横条照样显示 */
+.update-hint[hidden] {
+	display: none;
+}
+.update-hint a {
+	color: var(--green-hover);
+	font-weight: 600;
+	text-decoration: underline;
+}
+/* 文字型按钮：只用于“跳过此版本”这类低调动作，与主按钮区分开 */
+.btn-link {
+	border: none;
+	background: none;
+	padding: 0 2px;
+	color: var(--text-muted);
+	font-size: 13px;
+	white-space: nowrap;
+	flex-shrink: 0;
+	cursor: pointer;
+	text-decoration: underline;
+}
+.btn-link:hover {
+	color: var(--text);
+}
+

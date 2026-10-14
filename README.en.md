@@ -257,6 +257,7 @@ Log output is UTF-8, so non-ASCII node names render correctly.
 | GET | `/api/uuid` | Generate a v4 UUID |
 | GET | `/api/geolocation` | Probe landing city / ISP / weather through the channel exit |
 | GET | `/api/core_info`, `/api/check_update` | Kernel version / update check |
+| GET | `/api/app_update` | Whether the app itself has a newer release (returns `{"update": ...}` or `{"update": null}`; a failed check is `null`, never a made-up "up to date") |
 | POST | `/api/config` | Incremental save (writes only the keys given; never clears other fields) |
 | POST | `/api/enable` | Start the channel; **`source` is required** (`node`/`sub`/`json`) and that source must have an address |
 | POST | `/api/disable` | Stop the channel and restore the system proxy |
@@ -266,6 +267,9 @@ Log output is UTF-8, so non-ASCII node names render correctly.
 | POST | `/api/sysproxy` | Toggle the system proxy |
 | POST | `/api/test_ai` | Test AI endpoint connectivity (results carry `via` = `channel`/`direct` and `channel_running`) |
 | POST | `/api/update_core` | Download and replace the official kernel (refuses clearly when the kernel is in use) |
+| POST | `/api/dismiss_update` | Remember "skip this version" (suppresses that one version only; a newer release is announced again) |
+
+**Network behaviour**: the only outbound requests the app makes are three, all to GitHub (release assets and API), carrying no local information and no credentials — (1) the "check official update" button for the kernel, (2) downloading that kernel update, (3) one automatic check for a newer app release when the panel opens (`/api/app_update`, at most once per 24 hours, through the channel when it is running and directly otherwise, **and silent whenever the check cannot complete**). Beyond these, the tool sends nothing to you or to any third party.
 
 **Write-endpoint contract** (every POST above):
 

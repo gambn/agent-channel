@@ -51,6 +51,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "sub": {"mode": "", "node_key": None},
         "json": {"mode": "", "node_key": None},
     },
+    # 面板“跳过此版本”记住的版本号：只压住这一个版本，将来有更新的版本仍会提示。
+    "dismissed_version": "",
 }
 
 

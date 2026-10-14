@@ -258,6 +258,7 @@ agent-channel ui                                  启动控制面板
 | GET | `/api/uuid` | 生成一个 v4 UUID |
 | GET | `/api/geolocation` | 走通道出口探测落地城市 / ISP / 天气 |
 | GET | `/api/core_info`、`/api/check_update` | 内核版本 / 检查更新 |
+| GET | `/api/app_update` | 应用自身有没有新版本（只回 `{"update": ...}` 或 `{"update": null}`；查不到就是 null，不编"已是最新"） |
 | POST | `/api/config` | 增量保存配置（只写显式给出的键，不清空其它字段） |
 | POST | `/api/enable` | 启用通道；**必须显式给 `source`**（`node`/`sub`/`json`），且该来源地址非空 |
 | POST | `/api/disable` | 停止通道并还原系统代理 |
@@ -267,6 +268,9 @@ agent-channel ui                                  启动控制面板
 | POST | `/api/sysproxy` | 开关系统代理 |
 | POST | `/api/test_ai` | 测试 AI 接口连通性（结果带 `via` = `channel`/`direct` 与 `channel_running` 标注） |
 | POST | `/api/update_core` | 下载并替换官方内核（内核被占用时明确拒绝，不白下几十兆） |
+| POST | `/api/dismiss_update` | 记住“跳过这个版本”（只压住这一个版本，将来有更新的版本仍会提示） |
+
+**联网行为**：程序对外的主动请求只有三类，且全部只到 GitHub（Release 资产与 API），不带任何本机信息、不带凭据 —— ① 点“检查官方更新”查内核版本；② 点下载更新内核；③ 面板打开时自动查一次应用自身的新版本（`/api/app_update`，24 小时内最多一次，通道在跑时借通道出去、否则直连，**查不到就什么都不显示**）。除此之外本工具不向你或任何第三方发送数据。
 
 **写接口契约**（上面所有 POST）：
 

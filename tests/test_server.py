@@ -1285,3 +1285,47 @@ def test_quit_endpoint_rejects_cross_site():
             assert exc.code == 403, exc.code
         else:
             raise AssertionError("跨站 Origin 调 /api/quit 必须被拒")
+
+
+def test_app_update_hint_reports_only_newer_and_remembers_the_skip():
+    """版本提示端到端：只提示严格更新的版本，跳过只压住那一个版本，查不到就沉默。
+
+    网络那一步不打桩到 HTTP 层，而是把 `updates` 的“刚刚查过一次”状态直接放进去
+    —— 24 小时缓存本来就是“最多查一次”的实现，这样测的是提示的取舍，不是 GitHub。
+    """
+    from agent_channel import updates
+
+    port = get_free_port()
+    _launch_panel(port)
+    time.sleep(0.3)
+    base = f"http://127.0.0.1:{port}"
+    save_config({"dismissed_version": ""})
+
+    def _prime(version):
+        updates._cache.update(
+            {
+                "at": time.monotonic(),
+                "latest": None if version is None else {"version": version, "url": "https://example.invalid/r"},
+                "ttl": updates.CACHE_TTL_SECONDS,
+            }
+        )
+
+    _prime("v9.9.9")
+    payload = _get_json("/api/app_update", base)
+    assert payload["update"], "有严格更新的版本时必须提示"
+    assert payload["update"]["version"] == "v9.9.9"
+    assert payload["update"]["current"], "提示里要带上当前版本，否则用户无从比较"
+
+    assert _post_json("/api/dismiss_update", base, {"version": "v9.9.9"})["success"] is True
+    assert load_config().get("dismissed_version") == "v9.9.9"
+    assert _get_json("/api/app_update", base)["update"] is None, "跳过的版本不该再提示"
+
+    _prime("v9.9.10")
+    assert (
+        _get_json("/api/app_update", base)["update"]["version"] == "v9.9.10"
+    ), "跳过只压住那一个版本，更新的版本仍要提示"
+
+    # 查不到（缓存里没有结果）：什么都不说，绝不能被读成“已是最新”
+    _prime(None)
+    assert _get_json("/api/app_update", base)["update"] is None
+
