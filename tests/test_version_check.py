@@ -5,6 +5,7 @@
 版本、**查不到就沉默**（绝不等于“已是最新”）、跳过只压住**那一个**版本。
 """
 
+import importlib
 import time
 from unittest.mock import patch
 
@@ -156,22 +157,25 @@ def test_check_for_update_respects_dismissed_version_only_for_that_version():
 
 
 def test_first_check_in_a_fresh_process_actually_fetches_even_on_small_uptime():
-    """回归：缓存初值不能长得像"刚查过"。
+    """回归：**模块自己的初值**不能长得像"刚查过"，而不是"某个哨兵值长什么样"。
 
-    `time.monotonic()` 是开机以来的秒数。初值写成 0.0 时，开机不满 TTL（24 小时）的
-    机器上"距上次检查"会小于 TTL，首查被判为 fresh 而跳过；跳过又不更新缓存，于是
-    只要开机不满一天就永远不查、提示永不出现。实测踩过一次（演示实例上横条不来）。
+    `time.monotonic()` 是开机以来的秒数。初值若写成 0.0，开机不满 TTL（24 小时）的机器
+    上"距上次检查"会小于 TTL，首查被判为 fresh 而跳过；跳过又不更新缓存，于是只要开机
+    不满一天就永远不查、提示永不出现（实测踩过一次：演示实例上横条不来）。
+
+    判据刻意**不注入哨兵**：`importlib.reload` 回到模块自己的初值再问一次。这样它钉的是
+    行为（首查必须真去查），换一种同样正确的实现（比如用 -1.0 表示"从未查过"）也不会被
+    误杀 —— 审计指出过：直接塞 `_cache["at"] = None` 的写法在旧代码上之所以"红"，是因为
+    旧代码不认这个哨兵而抛 TypeError，并没有抓住初值这件事。
     """
-    updates._cache.update(
-        {"at": None, "latest": None, "ttl": updates.CACHE_TTL_SECONDS}
-    )
+    reloaded = importlib.reload(updates)
     calls: list[int] = []
 
     def counting(**kwargs):
         calls.append(1)
         return {"version": "v9.9.9", "url": ""}
 
-    got = updates.check_for_update("0.1.3", now=600.0, fetch=counting)  # 开机 10 分钟
+    got = reloaded.check_for_update("0.1.3", now=600.0, fetch=counting)  # 开机 10 分钟
     assert len(calls) == 1, "首次检查必须真的去查，不能被「刚查过」的初值挡住"
     assert got is not None and got["version"] == "v9.9.9"
 
