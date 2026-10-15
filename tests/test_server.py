@@ -1329,3 +1329,45 @@ def test_app_update_hint_reports_only_newer_and_remembers_the_skip():
     _prime(None)
     assert _get_json("/api/app_update", base)["update"] is None
 
+
+def test_head_matches_get_headers_without_body():
+    """HEAD 与 GET 同口径、只是不回正文（PI 第四轮 F1：面板此前 HEAD 一律 501）。
+
+    判据分两档：静态资源要求头部与 GET **逐字相同**（含 Content-Length）；API 只要求
+    200 + JSON Content-Type + 空正文（它的正文长度随状态变，不能拿来做相等断言）。
+    """
+    port = get_free_port()
+    _launch_panel(port)
+    time.sleep(0.3)
+    base = f"http://127.0.0.1:{port}"
+
+    def _head(path: str) -> tuple[int, bytes, str, str]:
+        req = urllib.request.Request(f"{base}{path}", method="HEAD")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return (
+                resp.status,
+                resp.read(),
+                resp.headers.get("Content-Type", ""),
+                resp.headers.get("Content-Length", ""),
+            )
+
+    def _get_raw(path: str) -> tuple[int, bytes, str]:
+        """按原始字节取 GET，用于与 HEAD 的头部逐字比对（`_get` 会做有损解码）。"""
+        with urllib.request.urlopen(f"{base}{path}", timeout=5) as resp:
+            return resp.status, resp.read(), resp.headers.get("Content-Type", "")
+
+    for path in ("/", "/favicon.ico"):
+        get_status, get_body, get_ctype = _get_raw(path)
+        head_status, head_body, head_ctype, head_len = _head(path)
+        assert get_status == head_status == 200, (path, get_status, head_status)
+        assert head_body == b"", f"{path} 的 HEAD 不该带正文"
+        assert head_ctype == get_ctype, (path, head_ctype, get_ctype)
+        assert head_len == str(len(get_body)), (
+            f"{path} 的 Content-Length 必须与 GET 一致（HEAD={head_len}）"
+        )
+
+    status, body, ctype, _ = _head("/api/status")
+    assert status == 200, status
+    assert body == b"", "HEAD 的 API 响应也必须没有正文"
+    assert ctype.startswith("application/json"), ctype
+

@@ -195,6 +195,10 @@ _CONTENT_TYPES: dict[str, str] = {
 
 
 class ChannelRequestHandler(http.server.BaseHTTPRequestHandler):
+    # HEAD 复用 GET 的分发流程，只在写正文处跳过（见 do_HEAD）。这里给个类级默认值，
+    # 免得任何不经 do_HEAD 的路径读到未定义的属性。
+    _head_only: bool = False
+
     def log_message(self, format: str, *args: Any) -> None:
         """静默 HTTP 访问日志，避免污染 stdout。"""
 
@@ -204,7 +208,8 @@ class ChannelRequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if not self._head_only:
+            self.wfile.write(body)
 
     def _send_asset(self, body: bytes, content_type: str) -> None:
         self.send_response(200)
@@ -215,7 +220,22 @@ class ChannelRequestHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.send_header("Pragma", "no-cache")
         self.end_headers()
-        self.wfile.write(body)
+        if not self._head_only:
+            self.wfile.write(body)
+
+    def do_HEAD(self) -> None:
+        """HEAD 与 GET 同一口径，只是不回正文。
+
+        HTTP/1.1 要求 HEAD 的头部与 GET 一致。面板此前完全不实现 `do_HEAD`，于是
+        `curl -I`、部分监控探针拿到的是 **501**（PI 第四轮 F1）。做法是复用整套 GET
+        分发：头部（含 Content-Type / Content-Length）与 GET 逐字相同，绝不会出现
+        "HEAD 说 200、GET 却是 404" 这种谎话；正文由上面两处 `_head_only` 跳过。
+        """
+        self._head_only = True
+        try:
+            self.do_GET()
+        finally:
+            self._head_only = False
 
     def _serve_static(self, name: str) -> bool:
         """读取并返回 web/ 下的静态资源；名称只能来自白名单。"""
