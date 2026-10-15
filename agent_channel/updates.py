@@ -8,8 +8,9 @@
 
 - **只告知**：三平台安装形态不同（deb / dmg / exe），静默自更新一旦出错就是把
   用户的通道弄没，风险远大于收益。这里只给“有新版本 + 去哪下”。
-- **不阻塞、不打扰**：默认 24 小时内最多查一次（失败则 10 分钟后可再试），失败
-  静默；没有新版本时上游拿到 None，前端什么都不显示。
+- **不阻塞、不打扰**：每次运行最多查一次——同一进程内 24 小时内不重复查（失败则 10
+  分钟后可再试）；缓存只在内存里（不落盘），所以面板每次启动会查一次，这正是想要的。
+  失败静默；没有新版本时上游拿到 None，前端什么都不显示。
 - **不说谎**：查不到（被墙 / 超时 / 限流 / 响应异常）一律返回 None，绝不把
   “没查到”说成“已是最新版本”——与探针那条原则同源。
 """
@@ -21,6 +22,7 @@ import re
 import threading
 import time
 import urllib.request
+from pathlib import Path
 from typing import Any, Callable
 
 # Release API：只取最新一条。不带任何 token —— 本工具不持有也不需要凭据。
@@ -92,7 +94,11 @@ def fetch_latest(
     )
     try:
         with urllib.request.build_opener(*handlers).open(req, timeout=timeout) as resp:
-            data = json.loads(resp.read(1 << 16).decode("utf-8", errors="ignore"))
+            # 整读，不设上限：早先写死 `read(1 << 16)`，一旦响应超过 64 KiB 就会截断 →
+            # json 解析报错 → 被同一层 except 吞掉 → 用户端表现成"横条永远不出现"，
+            # 而且不报错、不留痕（审计 A3）。端点是写死的 GitHub API，响应体很小
+            # （11 个资产时 22,951 B）；截断才是真隐患。
+            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
     except Exception:
         return None
     if not isinstance(data, dict):
@@ -132,6 +138,20 @@ def _asset_preferences(os_name: str, arch: str, system_install: bool) -> list[st
     return []
 
 
+def _is_system_install(path: Path) -> bool:
+    """这份程序是否装在**系统目录**（deb 到 /usr/bin）而非用户目录（install.sh 到 ~/.local/opt）。
+
+    用 `is_relative_to` 按**路径段**判断，不用字符串前缀（审计 A4）：`startswith` 会让
+    `/home/x` 命中 `/home/x-other/app`，Windows 上还多一层大小写差异。认错的代价很小
+    （只是 Linux 上把 tar.gz 与 deb 指错一个），但既然有正确写法就不该留着错的。
+    """
+    try:
+        return not path.resolve().is_relative_to(Path.home().resolve())
+    except Exception:
+        # 解析不了路径（权限/奇怪挂载）时按"用户目录"处理：那是更常见的那一种
+        return False
+
+
 def _platform_context() -> tuple[str, str, bool]:
     """(系统名, 架构, 是否系统目录安装)；认不出来返回空串组合（于是不给资产直链）。
 
@@ -145,11 +165,10 @@ def _platform_context() -> tuple[str, str, bool]:
         return "", "", False
     try:
         import sys
-        from pathlib import Path
 
         # 打包后的程序看自身可执行文件；从wheel/源码跑就看这个模块所在位置
         here = Path(sys.executable) if getattr(sys, "frozen", False) else Path(__file__)
-        system_install = not str(here.resolve()).startswith(str(Path.home()))
+        system_install = _is_system_install(here)
     except Exception:
         system_install = False
     return os_name, arch, system_install

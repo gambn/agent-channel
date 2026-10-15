@@ -7,9 +7,25 @@
 
 import importlib
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 from agent_channel import updates
+
+
+def test_system_install_detection_uses_path_segments_not_string_prefix():
+    """判"是否系统目录安装"必须按路径段，不能按字符串前缀（审计 A4）。
+
+    前缀法的两个错：`/home/x` 会"命中" `/home/x-other/app`（把别人的东西当成自己家目录里的），
+    Windows 上还多一层大小写差异。它只决定 Linux 上给用户 tar.gz 还是 deb，认错代价很小，
+    但既然有正确写法就不该留着错的——这条就是那个写法的机器判据。
+    """
+    home = Path.home()
+    assert updates._is_system_install(home / "opt" / "agent-channel") is False
+    assert updates._is_system_install(Path("/opt/agent-channel")) is True
+    # 前缀陷阱：与家目录同前缀的**兄弟**目录不算装在家目录里
+    sibling = Path(str(home) + "-other") / "app"
+    assert updates._is_system_install(sibling) is True
 
 
 def _fake(version, url="https://example.invalid/release"):

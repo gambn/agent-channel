@@ -694,6 +694,10 @@ function weatherDesc(code) {
 	return map[code] || "";
 }
 
+// 服务端刚告诉我们的新版本号：跳过时用它，而不是从 DOM 里读回来（审计 A6——
+// 从 DOM 读会在元素为空时 POST 空串，服务端如实回 400，表现成"这次跳过没记住"）。
+let pendingUpdateVersion = "";
+
 // 应用自身的新版本提示：后台悄悄问一次服务端，有严格更新的版本才显示一条横条。
 // 查不到（被墙 / 超时 / 限流）什么都不显示 —— “没查到”与“已是最新”在界面上一样安静，
 // 因为面板本来就没有“已是最新”这个结论可下。
@@ -702,6 +706,7 @@ async function checkAppUpdate() {
 		const res = await fetch("/api/app_update");
 		const data = await res.json();
 		if (!data.update) return;
+		pendingUpdateVersion = data.update.version;
 		document.getElementById("update-version").innerText = data.update.version;
 		document.getElementById("update-current").innerText =
 			data.update.current || "";
@@ -728,9 +733,7 @@ async function checkAppUpdate() {
 async function dismissUpdate() {
 	document.getElementById("update-hint").hidden = true;
 	try {
-		await postJson("/api/dismiss_update", {
-			version: document.getElementById("update-version").innerText,
-		});
+		await postJson("/api/dismiss_update", { version: pendingUpdateVersion });
 	} catch (e) {
 		/* 忽略：不影响使用 */
 	}
