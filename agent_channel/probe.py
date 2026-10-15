@@ -3,6 +3,7 @@
 独立于 UI 层，供控制面板与 Agent 工具共用。
 """
 
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -10,17 +11,47 @@ from typing import Any
 
 from .utils import MAX_PROBE_BYTES, read_limited
 
-# 探测必须**真**走给定的代理，所以在导入期把 urllib 的"静默绕过"永久关掉。
+# 探测必须**真**走给定的代理，所以探测期间要让 urllib 的"静默绕过"失效。
 # `ProxyHandler.proxy_open` 里有一步 `if req.host and proxy_bypass(host): return None`——
 # 命中宿主机的 `no_proxy`/`NO_PROXY`（Unix）或注册表 `ProxyOverride`（Windows）就直接直连。
 # 实测（2026-10-13）：`NO_PROXY=*`，甚至列表里只含探针目标域名时，给一个**死代理**的
 # 探测照样报 `reachable=True`；对照（未设 no_proxy）则是 Connection refused。后果是
 # 四个探测（google/cloudflare/youtube + 落地兜底）集体假阳："经通道可达"失去意义，
 # 通道死了却报可达——比"单探针误判节点不可用"更危险。
-# 本项目所有 opener 都显式指定代理或显式直连（`ProxyHandler({})`），没有任何一处依赖
-# no_proxy 语义，故进程级禁用安全：环境从此恒等于"未设 no_proxy"的默认态。
-# 放在导入期而非调用期：四个探测并发时各自打补丁会互相提前还原，竞态会让窗口重新漏开。
-urllib.request.proxy_bypass = lambda _host: False
+#
+# 但**作用域不能放宽**（审计 F1 / muse M1）：早先是导入期把 `proxy_bypass` 整个换成恒
+# False，那会让同一进程里**所有** urllib 调用都失去 no_proxy 语义——测试用 `urlopen` 打
+# 本机面板会被塞进宿主的 HTTP_PROXY（实测：设了 HTTP_PROXY 的机器上 27 个用例假失败），
+# 作为库被别人 import 时更是静默改掉对方的网络行为。
+# 现在改成"按线程 + 按调用"生效：只有探针线程在开连接的那一小段里恒不绕过，其余路径原样
+# 调回原函数。用 `threading.local` 而非"临时打补丁再还原"，是因为四个探测并发执行，打补丁
+# 会在彼此之间提前还原、把窗口重新漏开（这正是当初把补丁放进导入期的原因）。
+_proxy_bypass_original = urllib.request.proxy_bypass
+_probe_local = threading.local()
+
+
+def _proxy_bypass_for_probe(host: str) -> bool:
+    """探针线程内恒不绕过（探测必须真走给定代理）；其余调用与原生行为完全一致。"""
+    if getattr(_probe_local, "in_probe", False):
+        return False
+    return _proxy_bypass_original(host)
+
+
+urllib.request.proxy_bypass = _proxy_bypass_for_probe
+
+
+class _ProbeScope:
+    """标记"这一段连接是探针打的"：作用域内 `proxy_bypass` 恒为 False。
+
+    只影响当前线程（`threading.local`），所以并发探测互不干扰，探针之外的代码也拿不到
+    被改过的语义。
+    """
+
+    def __enter__(self) -> None:
+        _probe_local.in_probe = True
+
+    def __exit__(self, *exc_info: object) -> None:
+        _probe_local.in_probe = False
 
 
 def test_single_endpoint(
@@ -52,7 +83,7 @@ def test_single_endpoint(
         req = urllib.request.Request(
             url, headers={"User-Agent": "agent-channel-tester"}
         )
-        with opener.open(req, timeout=timeout) as resp:
+        with _ProbeScope(), opener.open(req, timeout=timeout) as resp:
             latency = (time.perf_counter() - start) * 1000.0
             return {
                 "reachable": True,
@@ -87,7 +118,7 @@ def geolocate_via_proxy(proxy_url: str, timeout: float = 12.0) -> dict[str, Any]
         handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
         opener = urllib.request.build_opener(handler)
         req = urllib.request.Request(url, headers={"User-Agent": "agent-channel"})
-        with opener.open(req, timeout=timeout) as resp:
+        with _ProbeScope(), opener.open(req, timeout=timeout) as resp:
             # 限长：这段流量经**不受信节点出口**，节点比订阅源更不可信
             return read_limited(resp, MAX_PROBE_BYTES).decode("utf-8", errors="replace")
 
