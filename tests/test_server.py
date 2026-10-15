@@ -8,6 +8,12 @@ from agent_channel.config import channel_state, load_config, save_config
 from agent_channel.server import launch_ui
 from agent_channel.utils import get_free_port
 
+# 面板测试一律**显式直连**：宿主若设着 HTTP_PROXY，`urlopen` 会把 127.0.0.1 的请求也交给
+# 代理而连不上（PI 第六轮实测：宿主有 HTTP_PROXY 而 NO_PROXY 未覆盖回环时，28 个用例
+# 假失败；那台机器与我这台只差这么一处环境设置）。与 `probe.py` 的"直连就显式直连"
+# 同一条理——测试打的是本机面板，不该受宿主代理影响。
+_DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 
 def _launch_panel(port: int) -> None:
     """测试里启动面板。
@@ -36,7 +42,7 @@ def _get(path: str, base: str, timeout: float = 5.0) -> tuple[int, str, str]:
     """GET 请求，返回 (status, body, content_type)。"""
 
     def _fetch() -> tuple[int, str, str]:
-        with urllib.request.urlopen(f"{base}{path}", timeout=timeout) as resp:
+        with _DIRECT_OPENER.open(f"{base}{path}", timeout=timeout) as resp:
             return (
                 resp.status,
                 resp.read().decode("utf-8", errors="replace"),
@@ -67,7 +73,7 @@ def _post_json(path: str, base: str, payload: dict) -> dict:
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with _DIRECT_OPENER.open(req, timeout=5) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, ValueError) as exc:
         raise AssertionError(f"POST {path} 失败: {exc}") from exc
@@ -81,7 +87,7 @@ def _post_status(path: str, base: str, payload: dict) -> tuple[int, dict]:
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with _DIRECT_OPENER.open(req, timeout=5) as resp:
             return resp.status, json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read().decode("utf-8"))
@@ -92,7 +98,7 @@ def _post_status(path: str, base: str, payload: dict) -> tuple[int, dict]:
 def _get_status(path: str, base: str) -> tuple[int, str]:
     """GET 返回 (status, body)，用于断言 400 等错误响应（保留错误 body）。"""
     try:
-        with urllib.request.urlopen(f"{base}{path}", timeout=5) as resp:
+        with _DIRECT_OPENER.open(f"{base}{path}", timeout=5) as resp:
             return resp.status, resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode("utf-8", errors="replace")
@@ -357,7 +363,7 @@ def test_static_assets_are_not_cached():
     _launch_panel(test_port)
     time.sleep(0.3)
     base = f"http://127.0.0.1:{test_port}"
-    with urllib.request.urlopen(f"{base}/app.js", timeout=5) as resp:
+    with _DIRECT_OPENER.open(f"{base}/app.js", timeout=5) as resp:
         cc = resp.headers.get("Cache-Control", "")
     assert "no-cache" in cc or "no-store" in cc, cc
 
@@ -1280,7 +1286,7 @@ def test_quit_endpoint_rejects_cross_site():
     )
     with patch("agent_channel.server.shutdown_app", lambda *a, **k: None):
         try:
-            urllib.request.urlopen(req, timeout=5)
+            _DIRECT_OPENER.open(req, timeout=5)
         except urllib.error.HTTPError as exc:
             assert exc.code == 403, exc.code
         else:
@@ -1343,7 +1349,7 @@ def test_head_matches_get_headers_without_body():
 
     def _head(path: str) -> tuple[int, bytes, str, str]:
         req = urllib.request.Request(f"{base}{path}", method="HEAD")
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with _DIRECT_OPENER.open(req, timeout=5) as resp:
             return (
                 resp.status,
                 resp.read(),
@@ -1353,7 +1359,7 @@ def test_head_matches_get_headers_without_body():
 
     def _get_raw(path: str) -> tuple[int, bytes, str]:
         """按原始字节取 GET，用于与 HEAD 的头部逐字比对（`_get` 会做有损解码）。"""
-        with urllib.request.urlopen(f"{base}{path}", timeout=5) as resp:
+        with _DIRECT_OPENER.open(f"{base}{path}", timeout=5) as resp:
             return resp.status, resp.read(), resp.headers.get("Content-Type", "")
 
     for path in ("/", "/favicon.ico"):
