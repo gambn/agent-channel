@@ -306,6 +306,8 @@ python packaging/build.py --installer  # produces setup.exe (Windows only, requi
 python tests/run_tests.py              # full suite (custom runner, not pytest)
 ```
 
+The same suite plus `pyright` run automatically on push and pull requests (`.github/workflows/ci.yml`); that step unsets proxy environment variables first, because the panel tests use `urllib` against loopback and a host-level `HTTP_PROXY` would route them through the proxy. The `wheel` is built on Linux only (`build.py --all` skips that step on Windows and macOS) so one commit never yields two same-named packages with different bytes.
+
 ## 11. FAQ
 
 **The browser does not open the panel after install.**

@@ -1471,9 +1471,9 @@ def _build_all_darwin() -> int:
     if _check_credentials(DIST_DIR / _onefile_name()) != 0:
         return 1
 
-    print("=== 3/3 pip wheel ===")
-    if build_wheel() != 0:
-        return 1
+    # 同上（F3 的同一根因）：wheel 只由 Linux 侧产出，macOS 侧跳过，免得每轮多一个
+    # 与 Linux 侧不同字节、又不入发布清单的同名文件。
+    print("=== 3/3 pip wheel：macOS 侧跳过（wheel 以 Linux 侧为准）===")
 
     write_build_manifest()
     _report_artifacts()
@@ -1507,9 +1507,10 @@ def _build_all_windows() -> int:
     if _check_credentials(DIST_DIR / _onefile_name()) != 0:
         return 1
 
-    print("=== 3/3 pip wheel ===")
-    if build_wheel() != 0:
-        return 1
+    # wheel 以 Linux 侧那份为准（同一提交在两处构建会产出不同字节，发布清单里只能有一份），
+    # 所以 Windows 侧跳过这一步——省得每轮多出一个"不入清单、还要在回报里解释"的文件
+    # （PI 第四轮 F3）。
+    print("=== 3/3 pip wheel：Windows 侧跳过（wheel 以 Linux 侧为准）===")
 
     write_build_manifest()
     _report_artifacts()

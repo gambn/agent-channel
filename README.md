@@ -307,6 +307,8 @@ python packaging/build.py --installer  # 产出 setup.exe（仅 Windows，需 In
 python tests/run_tests.py            # 全套测试（自写 runner，不经 pytest）
 ```
 
+同一套测试与 `pyright` 在 push 与 PR 上自动跑（`.github/workflows/ci.yml`）；那一步会先卸掉代理类环境变量——面板测试用 `urllib` 打本机端口，宿主自带 `HTTP_PROXY` 时会被交给代理。`wheel` 只由 Linux 侧构建（`build.py --all` 在 Windows 与 macOS 上跳过该步），免得同一提交出现两份不同字节的同名包。
+
 ## 十一、常见问题
 
 **装好后浏览器打不开面板？**

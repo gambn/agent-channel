@@ -1,0 +1,32 @@
+name: tests
+
+# 为什么要有这个（muse 审计 F2 / M2）：此前没有任何 CI，回归全靠人记得跑。
+# 本仓测试是零依赖自研 runner（`tests/run_tests.py`，裸函数 + assert，不经 pytest），
+# 所以 workflow 里不装任何测试框架，直接跑它。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 显式卸掉代理类环境变量：`test_server.py` 用 urllib 打本机面板，宿主若设着
+      # HTTP_PROXY，那些请求会被交给代理而连不上 127.0.0.1（muse 审计实测：198/27）。
+      # `probe.py` 已按线程收窄了 no_proxy 处理（M1），这里仍然卸掉——两道防线，
+      # 也让这条 workflow 在"宿主自带代理"的 runner 上同样成立。
+      - name: 测试套件（零依赖 runner）
+        run: |
+          unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy
+          python tests/run_tests.py
+
+      # 类型检查与本地发版口径一致（本机用同一个版本跑 0/0）
+      - name: 类型检查
+        run: npx --yes pyright@1.1.400
