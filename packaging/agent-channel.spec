@@ -109,7 +109,10 @@ a = Analysis(
     runtime_hooks=[],
     excludes=_EXCLUDES,
     noarchive=False,
-    optimize=0,
+    # 随包字节码统一去掉运行时不用的 docstring（-OO 口径）。0.1.4 的 Windows 包
+    # 实际就是这一档；此前 spec 写 0，换了构建机就会凭空多出约 350 KB 的 docstring，
+    # 同一版本在不同机器上出现两种体积。三平台统一到 2，不再随构建环境漂移。
+    optimize=2,
 )
 
 pyz = PYZ(a.pure)
