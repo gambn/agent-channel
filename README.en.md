@@ -37,6 +37,10 @@ export HTTPS_PROXY=http://127.0.0.1:20849
 
 Two limits worth knowing up front: an HTTP proxy only carries TCP, so QUIC / HTTP3 traffic will not go through this channel; and if the program is force-killed or the machine loses power, the next launch will close the stale system proxy, but it will **not restore your previous proxy settings** (the original values only ever lived in the process memory).
 
+Turning the system proxy off only touches **the entry this program set and that is still pointing at it**: if it never took over, or something else rewrote the value (or switched it to a PAC) in the meantime, nothing is written to the system proxy at all (the panel shows a neutral note instead of reporting a failure).
+
+> One more PAC caveat: on **Linux / macOS**, if you were using a **proxy auto-config (PAC)** script, a single normal "Stop channel" can still turn it into a manual proxy or disable it outright — the snapshot only records "on/off + address", so neither `mode=auto` nor the autoconfig URL can be expressed in it (Windows is exempt: the raw registry values are captured and written back verbatim). The case where PAC is switched on **during** the takeover is now blocked by the ownership check: when the current value is not the one we set, nothing is written.
+
 ## 2. Protocol support
 
 Protocol stack covered by the kernel:
@@ -264,7 +268,7 @@ Log output is UTF-8, so non-ASCII node names render correctly.
 | POST | `/api/benchmark` | Benchmark the requested source's nodes (`{source}`, default `active_source`) (landing IP + relay mark) |
 | POST | `/api/set_outbound` | Set the outbound `{mode, node_key?, source?}` |
 | POST | `/api/import_nodes` | Import / clear nodes (writes the `json` slot candidates only, **never switches the active source**) |
-| POST | `/api/sysproxy` | Toggle the system proxy |
+| POST | `/api/sysproxy` | Toggle the system proxy; disabling returns `{success, changed, reason, noop}` with `reason` = `ok` / `not-managed` / `superseded` / `failed` |
 | POST | `/api/test_ai` | Test AI endpoint connectivity (results carry `via` = `channel`/`direct` and `channel_running`) |
 | POST | `/api/update_core` | Download and replace the official kernel (refuses clearly when the kernel is in use) |
 | POST | `/api/dismiss_update` | Remember "skip this version" (suppresses that one version only; a newer release is announced again) |
