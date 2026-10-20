@@ -37,7 +37,9 @@ export HTTPS_PROXY=http://127.0.0.1:20849
 
 两条边界先说清：HTTP 代理只转 TCP，走 QUIC / HTTP3 的流量不经过本通道；程序被强杀或断电后，下次启动会自动关掉悬挂的系统代理，但**不会还原你原有的代理设置**（原值只在进程内存里，退出即丢）。
 
-> 另一个 PAC 限定：Windows 上若你原本用的是**自动配置脚本（PAC）**，正常「停止通道」一次也会变成手动代理或直接关闭——因为停止时的还原只按「开关 + 地址」恢复，PAC 的自动配置模式不在其中。上面「不会还原」说的是强杀/断电路径；PAC 这条连正常停止都会触发。
+关闭系统代理时只动**本程序自己设过、且当前仍是它**的那一份：没接管过、或期间被别的客户端改写／换成了 PAC，一律不写系统代理（面板会给一句中性提示，而不是报“切换失败”）。
+
+> 另一个 PAC 限定：在 **Linux / macOS** 上，若你原本用的是**自动配置脚本（PAC）**，正常「停止通道」一次仍会把它变成手动代理或直接关闭——快照只按「开关 + 地址」记，`mode=auto` 与 autoconfig URL 表达不出来（Windows 不受此限：注册表原值整项记着，能原样写回）。而「接管**期间**才启用 PAC」这种情形已被归属校验拦住：检测到当前值不是我们设的那一份，就不写系统代理。
 
 ## 二、协议支持
 
@@ -265,7 +267,7 @@ agent-channel ui                                  启动控制面板
 | POST | `/api/benchmark` | 测指定来源节点（`{source}`，缺省 `active_source`）（含落地 IP + 中转标记） |
 | POST | `/api/set_outbound` | 设出站 `{mode, node_key?, source?}` |
 | POST | `/api/import_nodes` | 导入 / 清空节点（只写 `json` 槽候选，**不改当前来源**） |
-| POST | `/api/sysproxy` | 开关系统代理 |
+| POST | `/api/sysproxy` | 开关系统代理；关闭时返回 `{success, changed, reason, noop}`，`reason` 取 `ok` / `not-managed` / `superseded` / `failed` |
 | POST | `/api/test_ai` | 测试 AI 接口连通性（结果带 `via` = `channel`/`direct` 与 `channel_running` 标注） |
 | POST | `/api/update_core` | 下载并替换官方内核（内核被占用时明确拒绝，不白下几十兆） |
 | POST | `/api/dismiss_update` | 记住“跳过这个版本”（只压住这一个版本，将来有更新的版本仍会提示） |
