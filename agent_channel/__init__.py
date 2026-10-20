@@ -24,7 +24,12 @@ from .core import (
     get_channel_status,
 )
 from .server import launch_ui
-from .sysproxy import get_system_proxy_status, set_system_proxy, unset_system_proxy
+from .sysproxy import (
+    get_system_proxy_status,
+    set_system_proxy,
+    unset_system_proxy,
+    unset_system_proxy_result,
+)
 from .tools import AGENT_TOOLS, execute_natural_language
 from .utils import generate_uuid, get_free_port
 
@@ -52,5 +57,6 @@ __all__ = [
     "slot_candidates",
     "slot_selection",
     "unset_system_proxy",
+    "unset_system_proxy_result",
     "update_core",
 ]

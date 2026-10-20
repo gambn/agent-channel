@@ -51,7 +51,7 @@ from .core import (
 )
 from .parsers import parse_singbox_json
 from .probe import geolocate_via_proxy, test_single_endpoint
-from .sysproxy import set_system_proxy, unset_system_proxy
+from .sysproxy import set_system_proxy, unset_system_proxy_result
 from .utils import generate_uuid, get_free_port, warn_stderr
 
 
@@ -420,7 +420,9 @@ class ChannelRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_sysproxy(self, payload: dict[str, Any]) -> None:
         if not payload.get("enabled", False):
-            self._send_json({"success": unset_system_proxy()})
+            # 用带结果的对象返回：“未接管，未改动”与真失败要分开，
+            # 否则前端会把 noop 弹成“系统代理切换失败”。
+            self._send_json(unset_system_proxy_result())
             return
         cur = get_channel_status()
         port = cur.get("port")

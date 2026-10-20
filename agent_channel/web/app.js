@@ -248,6 +248,18 @@ async function refreshStatus() {
 	}
 }
 
+/** 中性提示：不阻断、不报错，只告诉用户“这步没做改动”。用于系统代理未接管/已被改写的 noop。 */
+function notifyNeutral(text) {
+	const el = document.createElement("div");
+	el.textContent = text;
+	el.style.cssText =
+		"position:fixed;left:50%;bottom:28px;transform:translateX(-50%);" +
+		"padding:10px 16px;border-radius:10px;font-size:13px;z-index:9999;" +
+		"background:rgba(40,40,46,.95);color:#eee;border:1px solid rgba(255,255,255,.15)";
+	document.body.appendChild(el);
+	setTimeout(() => el.remove(), 4000);
+}
+
 async function handleToggleSysProxy(checkbox) {
 	const willEnable = checkbox.checked;
 	try {
@@ -260,6 +272,13 @@ async function handleToggleSysProxy(checkbox) {
 		if (!data.success) {
 			alert(data.error || "系统代理切换失败");
 			checkbox.checked = !willEnable;
+		} else if (data.noop) {
+			// “未接管，未改动”不是失败：不弹错误、不回滚勾选（下一次轮询会按真实状态刷新）。
+			notifyNeutral(
+				data.reason === "not-managed"
+					? "系统代理不是本程序设置的，未做改动"
+					: "系统代理已被其他程序改写，未做改动",
+			);
 		}
 	} catch (e) {
 		alert("请求异常: " + e);
