@@ -36,6 +36,13 @@ ONEFILE_NAME = "agent-channel" if sys.platform == "win32" else "agent-channel-sl
 # 在 Intel 上用 universal2 解释器出 arm64 包时就靠它。
 TARGET_ARCH = os.environ.get("AGENT_CHANNEL_TARGET_ARCH") or None
 
+# Windows 走托盘、没有原生窗口。构建机若带 Tcl/Tk，PyInstaller 的 tkinter hook 会把
+# 整套 tcl/tk 数据一起收进包（0.1.5 实测多出 919 个文件、约 4 MB 未压缩，0.1.4 为零）。
+# 这不是功能差异，是体积回归，按平台显式排掉；macOS 的窗口依赖 Tcl/Tk，不能排。
+_EXCLUDES = ["pytest", "PyInstaller", "setuptools", "pip"]
+if sys.platform == "win32":
+    _EXCLUDES += ["tkinter", "_tkinter"]
+
 # `.icns` 由 build.py 用 sips + iconutil 现生成（不写进仓库），路径经环境变量传进来。
 ICNS_PATH = os.environ.get("AGENT_CHANNEL_ICNS")
 
@@ -100,7 +107,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["pytest", "PyInstaller", "setuptools", "pip"],
+    excludes=_EXCLUDES,
     noarchive=False,
     optimize=0,
 )
