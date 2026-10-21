@@ -34,7 +34,7 @@ def test_sysproxy_basic():
             ),
             patch("agent_channel.sysproxy._ORIGINAL_PROXY", None),
             # 本用例验的是“还原原值”，归属校验不在它的问题域内，直接放行。
-            patch("agent_channel.sysproxy._current_proxy_is_ours", lambda: True),
+            patch("agent_channel.sysproxy._current_proxy_ownership", lambda: True),
         ):
             assert set_system_proxy(port=54321)
             mock_set.assert_called_once_with(54321, "127.0.0.1")
@@ -573,10 +573,10 @@ def test_system_proxy_managed_follows_current_ownership():
 
     try:
         _arm_managed()
-        with patch("agent_channel.sysproxy._current_proxy_is_ours", lambda: True):
+        with patch("agent_channel.sysproxy._current_proxy_ownership", lambda: True):
             assert sysproxy.system_proxy_managed() is True
         sysproxy._invalidate_status_cache()  # 绕过 5 秒缓存，模拟下一次轮询
-        with patch("agent_channel.sysproxy._current_proxy_is_ours", lambda: False):
+        with patch("agent_channel.sysproxy._current_proxy_ownership", lambda: False):
             assert sysproxy.system_proxy_managed() is False
         assert sysproxy._MANAGED_PORT is None, "归属丢了就该把端口清掉，别每轮重读"
     finally:
@@ -595,13 +595,37 @@ def test_system_proxy_managed_is_cached_for_polling():
 
     try:
         _arm_managed()
-        with patch("agent_channel.sysproxy._current_proxy_is_ours", counter):
+        with patch("agent_channel.sysproxy._current_proxy_ownership", counter):
             assert sysproxy.system_proxy_managed() is True
             assert sysproxy.system_proxy_managed() is True
             assert calls["n"] == 1, "TTL 内应复用缓存"
             sysproxy._invalidate_status_cache()
             assert sysproxy.system_proxy_managed() is True
             assert calls["n"] == 2, "自己的写操作后必须重读"
+    finally:
+        _reset_managed_state()
+
+
+def test_system_proxy_managed_survives_transient_read_failure():
+    """一次读失败不能当“已被改写”：不清 `_MANAGED_PORT`、下一轮成功仍算接管。
+
+    这是第 5 轮引入的风险：`_current_proxy_is_ours()` 把“确定不是”和“读失败”都返回
+    False，若直接据此清端口，停通道就会走 superseded 分支、不再还原用户原有代理。
+    """
+    from agent_channel import sysproxy
+
+    try:
+        _arm_managed()
+        with patch("agent_channel.sysproxy._current_proxy_ownership", lambda: None):
+            assert sysproxy.system_proxy_managed() is True
+            assert sysproxy._MANAGED_PORT is not None, "读失败必须保留管理态"
+        sysproxy._invalidate_status_cache()
+        with patch("agent_channel.sysproxy._current_proxy_ownership", lambda: True):
+            assert sysproxy.system_proxy_managed() is True
+        sysproxy._invalidate_status_cache()
+        with patch("agent_channel.sysproxy._current_proxy_ownership", lambda: False):
+            assert sysproxy.system_proxy_managed() is False
+            assert sysproxy._MANAGED_PORT is None, "确定被改写才清端口"
     finally:
         _reset_managed_state()
 

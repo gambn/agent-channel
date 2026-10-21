@@ -515,11 +515,12 @@ def _windows_server_is_ours(server: Any, expected: int) -> bool:
     return _segment_is_ours(host, port, expected)
 
 
-def _current_proxy_is_ours() -> bool:
-    """当前系统代理是否仍**逐段精确**等于我们设的那一份。
+def _current_proxy_ownership() -> bool | None:
+    """当前系统代理是否仍**逐段精确**等于我们设的那一份；读不出来返回 None。
 
-    任何一段不是我们写的（被别的客户端改写、用户中途换成 PAC、只改了其中一段），
-    或者读不出来，一律 False —— 调用方据此只清自己的状态、不写系统。
+    三态的意义：`False` 是“确定不是我们的”，`None` 是“这次读失败、不知道”。
+    调用方必须分开处理——瞬时读失败不能当成被改写，否则会把管理态丢掉，
+    之后停通道就不敢还原用户原来的代理。
 
     残留风险（可接受）：判定与写入之间仍有毫秒级 TOCTOU 窗口，另一个客户端刚好在这个
     窗口里改写仍会被覆盖。gsettings / 注册表都没有互斥机制，要彻底消除需另做系统级锁。
@@ -529,7 +530,7 @@ def _current_proxy_is_ours() -> bool:
         return False
     seg = _read_current_segments()
     if seg is None:
-        return False
+        return None
     kind = seg.get("kind")
     if kind == "windows":
         try:
@@ -559,6 +560,11 @@ def _current_proxy_is_ours() -> bool:
     return True
 
 
+def _current_proxy_is_ours() -> bool:
+    """布尔版：读不出来也按“不是我们的”处理，只用于“绝不写系统”的守卫。"""
+    return _current_proxy_ownership() is True
+
+
 def system_proxy_managed() -> bool:
     """当前系统代理是否由本程序接管、且仍逐段指向本通道。
 
@@ -575,11 +581,17 @@ def system_proxy_managed() -> bool:
     now = time.monotonic()
     if _managed_cache is not None and now - _managed_cache[0] < _MANAGED_CACHE_TTL:
         return _managed_cache[1]
-    ours = _current_proxy_is_ours()
-    if not ours:
+    ownership = _current_proxy_ownership()
+    if ownership is None:
+        # 读失败：不清管理态、不把它当“已被改写”。沿用上次结论（还没结论就按“我们设过”
+        # 算），并照常缓存 5 秒——既不会一次瞬时失败就永久丢掉还原能力，也不会每轮重读。
+        last = _managed_cache[1] if _managed_cache is not None else True
+        _managed_cache = (now, last)
+        return last
+    if not ownership:
         _MANAGED_PORT = None
-    _managed_cache = (now, ours)
-    return ours
+    _managed_cache = (now, ownership)
+    return ownership
 
 
 def heal_stale_system_proxy(listen_port: int) -> bool:
