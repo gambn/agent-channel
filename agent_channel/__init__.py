@@ -2,7 +2,7 @@
 agent-channel通道代理: 轻量级 AI 通道代理模块
 """
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 
 from .binary import check_core_update, update_core
 from .config import (

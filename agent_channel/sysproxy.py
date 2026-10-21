@@ -553,6 +553,18 @@ def _current_proxy_is_ours() -> bool:
     return True
 
 
+def system_proxy_managed() -> bool:
+    """当前系统代理是否由本程序接管、且仍逐段指向本通道。
+
+    面板的“浏览器走本通道”开关只该反映这一件事。别的代理工具把系统代理设成手动
+    （`mode=manual`）时，那**不是**本通道被接管：开关必须保持关闭，不能把“全局浏览器
+    代理开着”映射成本程序已接管。没接管过时直接返回 False，不产生任何子进程读取。
+    """
+    if _MANAGED_PORT is None:
+        return False
+    return _current_proxy_is_ours()
+
+
 def heal_stale_system_proxy(listen_port: int) -> bool:
     """启动期自愈：系统代理指向我们自己的端口、而本进程并无通道在跑时，关掉它。
 

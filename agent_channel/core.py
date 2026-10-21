@@ -19,6 +19,7 @@ from .runner import SingboxRunner, build_minimal_config, heal_stale_kernel
 from .sysproxy import (
     get_system_proxy_status,
     heal_stale_system_proxy,
+    system_proxy_managed,
     set_system_proxy,
     unset_system_proxy,
 )
@@ -584,7 +585,11 @@ def _disable_channel() -> None:
 def get_channel_status() -> dict[str, Any]:
     """获取当前通道运行状态，附带系统代理状态"""
     st = dict(_CURRENT_STATUS)
-    st["system_proxy"] = get_system_proxy_status()
+    st["system_proxy"] = {
+        **get_system_proxy_status(),
+        # 开关只反映“本通道是否接管了系统代理”；别人设的手动代理不算接管
+        "managed": system_proxy_managed(),
+    }
     return st
 
 

@@ -554,3 +554,45 @@ def test_read_current_segments_macos_parses_web_secure_and_auto():
         "secure": ("127.0.0.1", "9999"),
         "auto": False,
     }, seg
+
+
+def test_system_proxy_managed_false_when_never_taken_over():
+    """没接管过时开关必须是关的：别的代理工具开着系统代理，不等于本通道被接管。"""
+    from agent_channel import sysproxy
+
+    try:
+        _reset_managed_state()
+        assert sysproxy.system_proxy_managed() is False
+    finally:
+        _reset_managed_state()
+
+
+def test_system_proxy_managed_follows_current_ownership():
+    """接管过、且当前仍逐段指向本通道才算 managed；被改写后要掉回 False。"""
+    from agent_channel import sysproxy
+
+    try:
+        _arm_managed()
+        with patch("agent_channel.sysproxy._current_proxy_is_ours", lambda: True):
+            assert sysproxy.system_proxy_managed() is True
+        with patch("agent_channel.sysproxy._current_proxy_is_ours", lambda: False):
+            assert sysproxy.system_proxy_managed() is False
+    finally:
+        _reset_managed_state()
+
+
+def test_channel_status_keeps_other_proxy_off_the_switch():
+    """状态里的 managed 与 enabled 分开：别人开的系统代理 enabled=True、managed=False。"""
+    from agent_channel import core
+
+    with (
+        patch.object(
+            core,
+            "get_system_proxy_status",
+            lambda: {"enabled": True, "server": "127.0.0.1:12334"},
+        ),
+        patch.object(core, "system_proxy_managed", lambda: False),
+    ):
+        st = core.get_channel_status()
+    assert st["system_proxy"]["enabled"] is True
+    assert st["system_proxy"]["managed"] is False

@@ -229,18 +229,35 @@ async function refreshStatus() {
 		document.getElementById("status-node").innerText =
 			data.node_tag || (isRunning ? "本地直通" : "-");
 
-		// 系统代理开关状态同步
-		const sysProxy = data.system_proxy;
-		const isSysOn = sysProxy && sysProxy.enabled;
+		// 开关只表示“本通道是否接管了系统代理”。
+		// 别的代理工具把系统代理设成手动时，那不是我方接管：开关保持关闭并说明来源，
+		// 不能把“全局浏览器代理开着”映射成“本程序已接管”。
+		const sysProxy = data.system_proxy || {};
+		const proxyEnabled = !!sysProxy.enabled;
+		const managed = !!sysProxy.managed;
+		const ours = proxyEnabled && managed;
 		const toggleEl = document.getElementById("toggle-sysproxy");
 		const tagEl = document.getElementById("sysproxy-tag");
-		toggleEl.checked = isSysOn;
-		tagEl.innerText = isSysOn ? "已同步系统代理" : "未同步";
-		tagEl.style.color = isSysOn ? "var(--green-tag-text)" : "var(--text-muted)";
-		tagEl.style.background = isSysOn
-			? "var(--green-soft-bg)"
-			: "var(--neutral-btn)";
-		tagEl.style.border = isSysOn
+		const hintEl = document.getElementById("sysproxy-hint");
+		toggleEl.checked = ours;
+		if (ours) {
+			tagEl.innerText = "已接管";
+			hintEl.innerText =
+				"浏览器已指向本通道；关闭开关或停止通道时恢复开启前的代理设置。";
+		} else if (proxyEnabled) {
+			tagEl.innerText = "其他程序设置";
+			hintEl.innerText =
+				"系统代理当前由其他程序设置（" +
+				(sysProxy.server || "未知") +
+				"），本程序未接管。开启本开关会把浏览器指向本通道，关闭时恢复该设置。";
+		} else {
+			tagEl.innerText = "未同步";
+			hintEl.innerText =
+				"开启后浏览器走本通道；关闭或通道停止时恢复开启前的设置（跨 Windows/macOS/Linux）。";
+		}
+		tagEl.style.color = ours ? "var(--green-tag-text)" : "var(--text-muted)";
+		tagEl.style.background = ours ? "var(--green-soft-bg)" : "var(--neutral-btn)";
+		tagEl.style.border = ours
 			? "1px solid var(--green-light-border)"
 			: "1px solid var(--card-border)";
 	} catch (e) {

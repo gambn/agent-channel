@@ -88,7 +88,7 @@
             <div style="display: flex; align-items: center; gap: 8px">
               <span
                 style="font-size: 13px; font-weight: 600; color: var(--text)"
-                >同步为本地系统代理（开启 Chrome / Edge 浏览器支持）</span
+                >将浏览器指向本通道（接管系统代理）</span
               >
               <span
                 id="sysproxy-tag"
@@ -102,9 +102,9 @@
                 >未同步</span
               >
             </div>
-            <span style="font-size: 12px; color: var(--text-muted)"
-              >开启后系统全局浏览器开箱即用，通道停止或退出时自动还原关闭 (跨
-              Windows/macOS/Linux)</span
+            <span id="sysproxy-hint" style="font-size: 12px; color: var(--text-muted)"
+              >开启后浏览器走本通道；关闭或通道停止时恢复开启前的设置（跨
+              Windows/macOS/Linux）</span
             >
           </div>
           <label class="switch">

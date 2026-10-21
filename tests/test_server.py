@@ -118,7 +118,7 @@ def test_server_endpoints():
     assert "text/html" in ctype
     assert "agent-channel通道代理" in html
     assert "极轻量·零驱动·无特权 AI 通道管理模块" not in html
-    assert "同步为本地系统代理（开启 Chrome / Edge 浏览器支持）" in html
+    assert "将浏览器指向本通道（接管系统代理）" in html
     # 前端已拆为外部静态文件，不再内联
     assert 'href="style.css"' in html
     assert 'src="app.js"' in html
