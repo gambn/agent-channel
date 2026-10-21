@@ -21,12 +21,18 @@ _MANAGED_PORT: int | None = None
 # 状态，不会读到过期值。
 _STATUS_CACHE_TTL = 2.0
 _status_cache: tuple[float, dict[str, Any]] | None = None
+# 归属读数的短缓存。它只在“已接管”时才会真的去逐段读系统代理（5 个 gsettings /
+# 4 次 networksetup），而面板 3 秒轮询一次；5 秒 TTL 把稳态开销压到每 5 秒一次，
+# 同时外部改写最多 5 秒就能被看见。
+_MANAGED_CACHE_TTL = 5.0
+_managed_cache: tuple[float, bool] | None = None
 
 
 def _invalidate_status_cache() -> None:
     """让下次读取重新问系统（自己的写操作之后必须调用）。"""
-    global _status_cache
+    global _status_cache, _managed_cache
     _status_cache = None
+    _managed_cache = None
 
 
 def get_os_type() -> str:
@@ -559,10 +565,21 @@ def system_proxy_managed() -> bool:
     面板的“浏览器走本通道”开关只该反映这一件事。别的代理工具把系统代理设成手动
     （`mode=manual`）时，那**不是**本通道被接管：开关必须保持关闭，不能把“全局浏览器
     代理开着”映射成本程序已接管。没接管过时直接返回 False，不产生任何子进程读取。
+
+    读数有 5 秒缓存：稳态下每 5 秒才逐段读一次，外部改写最多 5 秒被发现。判定为
+    “已经不是我们的”时顺手清掉 `_MANAGED_PORT`，让后续轮询回到零成本。
     """
+    global _MANAGED_PORT, _managed_cache
     if _MANAGED_PORT is None:
         return False
-    return _current_proxy_is_ours()
+    now = time.monotonic()
+    if _managed_cache is not None and now - _managed_cache[0] < _MANAGED_CACHE_TTL:
+        return _managed_cache[1]
+    ours = _current_proxy_is_ours()
+    if not ours:
+        _MANAGED_PORT = None
+    _managed_cache = (now, ours)
+    return ours
 
 
 def heal_stale_system_proxy(listen_port: int) -> bool:

@@ -568,15 +568,40 @@ def test_system_proxy_managed_false_when_never_taken_over():
 
 
 def test_system_proxy_managed_follows_current_ownership():
-    """接管过、且当前仍逐段指向本通道才算 managed；被改写后要掉回 False。"""
+    """接管过、且当前仍逐段指向本通道才算 managed；被改写后掉回 False 并清掉端口。"""
     from agent_channel import sysproxy
 
     try:
         _arm_managed()
         with patch("agent_channel.sysproxy._current_proxy_is_ours", lambda: True):
             assert sysproxy.system_proxy_managed() is True
+        sysproxy._invalidate_status_cache()  # 绕过 5 秒缓存，模拟下一次轮询
         with patch("agent_channel.sysproxy._current_proxy_is_ours", lambda: False):
             assert sysproxy.system_proxy_managed() is False
+        assert sysproxy._MANAGED_PORT is None, "归属丢了就该把端口清掉，别每轮重读"
+    finally:
+        _reset_managed_state()
+
+
+def test_system_proxy_managed_is_cached_for_polling():
+    """稳态下每 5 秒才逐段读一次：3 秒轮询不重复起 5 个 gsettings。"""
+    from agent_channel import sysproxy
+
+    calls = {"n": 0}
+
+    def counter():
+        calls["n"] += 1
+        return True
+
+    try:
+        _arm_managed()
+        with patch("agent_channel.sysproxy._current_proxy_is_ours", counter):
+            assert sysproxy.system_proxy_managed() is True
+            assert sysproxy.system_proxy_managed() is True
+            assert calls["n"] == 1, "TTL 内应复用缓存"
+            sysproxy._invalidate_status_cache()
+            assert sysproxy.system_proxy_managed() is True
+            assert calls["n"] == 2, "自己的写操作后必须重读"
     finally:
         _reset_managed_state()
 

@@ -235,7 +235,7 @@ async function refreshStatus() {
 		const sysProxy = data.system_proxy || {};
 		const proxyEnabled = !!sysProxy.enabled;
 		const managed = !!sysProxy.managed;
-		const ours = proxyEnabled && managed;
+		const ours = managed;
 		const toggleEl = document.getElementById("toggle-sysproxy");
 		const tagEl = document.getElementById("sysproxy-tag");
 		const hintEl = document.getElementById("sysproxy-hint");

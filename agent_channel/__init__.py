@@ -27,6 +27,7 @@ from .server import launch_ui
 from .sysproxy import (
     get_system_proxy_status,
     set_system_proxy,
+    system_proxy_managed,
     unset_system_proxy,
     unset_system_proxy_result,
 )
@@ -56,6 +57,7 @@ __all__ = [
     "set_system_proxy",
     "slot_candidates",
     "slot_selection",
+    "system_proxy_managed",
     "unset_system_proxy",
     "unset_system_proxy_result",
     "update_core",
