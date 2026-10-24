@@ -1,6 +1,6 @@
 # agent-channel
 
-A local channel **for agents**: it lets an agent call the APIs of major overseas AI models; wiring the browser in is an optional extra.
+A local channel **for agents**: it lets an agent call the APIs of major overseas AI models; the channel, when used by an agent only, lets you turn the browser's proxy access on and off.
 
 It is built on the **sing-box** kernel. It opens a proxy port on `127.0.0.1:20849` locally, and can optionally point the Windows system proxy at it.
 
